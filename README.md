@@ -1,5 +1,16 @@
 # Home Assignment — Software Engineer (AI native)
 
+
+## Questions
+- What does the "AI not active" toggle do?
+- What are the minimum required channels for the demo?
+
+
+## Business Rules
+- Human user can only reply to whatsapp messages when AI is not active
+- Human user cannot reply to on=site message, that's always managed by an AI agent
+
+
 ## Context
 
 TextYess is the AI-first CRM for e-commerce. We help brands build real relationships with their customers — automating and personalizing conversations across WhatsApp, email, and voice, and connecting every interaction to revenue.
@@ -24,10 +35,12 @@ This is intentionally open-ended. We want to see how you think about a product p
 
 ## Stack
 
-Our codebase is a TypeScript monorepo using **pnpm workspaces** and **Turborepo**. We work with:
+Context7 ids are between parenthesis.
 
-- **Backend** — NestJS, MongoDB (Mongoose), REST
-- **Frontend** — Next.js, Tailwind CSS, shadcn/ui, React Query
+Our codebase is a **TypeScript** (`/microsoft/typescript`) monorepo using **pnpm workspaces** (`/pnpm/pnpm`) and **Turborepo** (`/vercel/turborepo`). We work with:
+
+- **Backend** — NestJS (`/nestjs/docs.nestjs.com`), MongoDB (`/mongodb/docs`) (Mongoose (`/automattic/mongoose`)), REST
+- **Frontend** — Next.js (`/vercel/next.js`), Tailwind CSS (`/tailwindlabs/tailwindcss.com`), shadcn/ui (`/shadcn-ui/ui`), React Query (`/tanstack/query`), Cypress for e2e tests (`/cypress-io/cypress-documentation`)
 - **Shared** — packages for models, UI components, and locales
 
 We also provide a `tailwind.config.js` with our design tokens already set up. Use it as a reference to stay consistent with our visual language.
