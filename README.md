@@ -3,12 +3,24 @@
 
 ## Questions
 - What does the "AI not active" toggle do?
+  - Simply means that a human operator took over communication for this customer.
 - What are the minimum required channels for the demo?
+  - Email, whatsapp and voice. On-site messaging is a nice to have
+- How interactive should the demo be?
+  - Read-only application is fine.
+  - Nice to have:
+    - Maybe a creation of a contact + sending a message to a lead.
+    - While customer support is the main use case for this app, marketing and sales should also be considered
+- What is the difference between Managed/To Manage and Inbound/Outbound?
+  - Inbound and Outbound here are used in the marketing sense, where inbound is "pulling" customers, while outbound is "pushing" to customers. Therefore, these values refer to the `type` of the Conversation
+  - Managed - AI is not active but doesn't need customer attention
+  - To manage - Customer waiting for a response (because AI is not active)
+- Contact conciliacion and linking is also one of the main evaluation points
 
 
 ## Business Rules
 - Human user can only reply to whatsapp messages when AI is not active
-- Human user cannot reply to on=site message, that's always managed by an AI agent
+- Human user cannot reply to on-site message, that's always managed by an AI agent
 
 
 ## Context
