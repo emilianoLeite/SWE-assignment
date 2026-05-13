@@ -1,0 +1,13 @@
+{
+  "name": "textyess",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "web": "npm run dev --workspace=apps/web"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  }
+}
