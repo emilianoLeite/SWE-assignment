@@ -62,6 +62,7 @@ export interface TimelineMessage {
 export interface TimelineBlock {
   channel: Channel;
   conversationId: string;
+  aiActive: boolean;
   blockStart: Date;
   channelData: {
     subject?: string;
@@ -215,6 +216,7 @@ export class CustomersService {
       sortKey: Date;
       convId: string;
       channel: Channel;
+      aiActive: boolean;
       message?: TimelineMessage;
       isVoice: boolean;
     }
@@ -227,6 +229,7 @@ export class CustomersService {
           sortKey: conv.lastActivityAt,
           convId: conv._id.toString(),
           channel: conv.channel,
+          aiActive: conv.aiActive ?? true,
           isVoice: true,
         });
       }
@@ -239,6 +242,7 @@ export class CustomersService {
         sortKey: msg.sentAt,
         convId: conv._id.toString(),
         channel: conv.channel,
+        aiActive: conv.aiActive ?? true,
         message: {
           _id: (msg._id as Types.ObjectId).toString(),
           sentBy: msg.sentBy,
@@ -257,6 +261,9 @@ export class CustomersService {
     for (const entry of entries) {
       const last = blocks[blocks.length - 1];
       if (last && last.channel === entry.channel) {
+        // Update to the most recent conversation's state
+        last.conversationId = entry.convId;
+        last.aiActive = entry.aiActive;
         if (!entry.isVoice && entry.message) {
           last.messages.push(entry.message);
         }
@@ -265,6 +272,7 @@ export class CustomersService {
         blocks.push({
           channel: entry.channel,
           conversationId: entry.convId,
+          aiActive: entry.aiActive,
           blockStart: entry.sortKey,
           channelData: {
             subject: conv.channelData?.subject,

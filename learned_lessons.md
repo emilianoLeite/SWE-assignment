@@ -15,3 +15,9 @@
 - **`CustomerModel` must be explicitly injected even when Customer schema is already in the module** — having `MongooseModule.forFeature([{ name: Customer.name, schema: CustomerSchema }])` in the module registers the model for DI, but each service must `@InjectModel(Customer.name)` it explicitly. Forgetting the injection causes a runtime DI error even if the model is declared in the module.
 
 - **Lean `.findById()` doesn't include Mongoose timestamps in type** — calling `.findById(id).lean()` returns a plain JS object where `createdAt`/`updatedAt` exist at runtime (added by `@Schema({ timestamps: true })`) but aren't in the TypeScript type. Cast to `unknown as { createdAt: Date }` to access them safely without adding a type assertion hack to the schema class.
+
+- **Use the hydrated document (non-lean) for PATCH mutations** — when you need to call `.save()` after mutating a field, don't use `.lean()`. Fetch via `findById(id)` (without `.lean()`), mutate, then `await doc.save()`. Lean gives a plain JS object with no save method.
+
+- **Track the most-recent conversation state when merging timeline blocks** — the timeline service merges same-channel consecutive messages across multiple conversations into one visual block. When merging, update `conversationId` and `aiActive` to the latest entry's conversation so the frontend always sees the current state of the most recent conversation in that channel, not the one that started the block.
+
+- **`useMutation` + `invalidateQueries` is the clean pattern for toggles** — when a PATCH endpoint updates a resource that's also loaded via `useQuery`, call `queryClient.invalidateQueries({ queryKey: [...] })` in `onSuccess` to re-fetch. This avoids manually reconciling optimistic state and keeps the query cache as the single source of truth.

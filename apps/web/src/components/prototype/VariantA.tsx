@@ -4,7 +4,7 @@
 // Styled to match the TextYess product mockups.
 
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Search, Filter, Tag, Ban, UserPlus, Copy,
   ExternalLink, Paperclip, Smile, Send, Plus,
@@ -39,6 +39,7 @@ interface ApiCustomerDetail {
 interface ApiTimelineBlock {
   channel: Channel;
   conversationId: string;
+  aiActive: boolean;
   blockStart: string;
   channelData: {
     subject?: string;
@@ -95,6 +96,8 @@ function apiBlocksToFrontend(apiBlocks: ApiTimelineBlock[]): ConversationBlock[]
     if (block.channel === "voice") {
       return {
         channel: "voice",
+        conversationId: block.conversationId,
+        aiActive: block.aiActive,
         entries: [{
           channel: "voice" as Channel,
           sentBy: "ai" as const,
@@ -125,6 +128,8 @@ function apiBlocksToFrontend(apiBlocks: ApiTimelineBlock[]): ConversationBlock[]
 
     return {
       channel: block.channel,
+      conversationId: block.conversationId,
+      aiActive: block.aiActive,
       entries,
       emailSubject: block.channelData.subject,
       blockStart: block.blockStart,
@@ -147,6 +152,8 @@ interface TimelineEntry {
 
 interface ConversationBlock {
   channel: Channel;
+  conversationId: string;
+  aiActive: boolean;
   entries: TimelineEntry[];
   emailSubject?: string;
   voiceMeta?: { duration: string; outcome: string };
@@ -192,6 +199,8 @@ function buildTimeline(customer: Customer): ConversationBlock[] {
     } else {
       blocks.push({
         channel: entry.channel,
+        conversationId: "",
+        aiActive: true,
         entries: [entry],
         emailSubject: entry.emailSubject,
         voiceMeta: entry.voiceMeta,
@@ -346,31 +355,53 @@ function ConversationBlock({ block }: { block: ConversationBlock }) {
 
 // ─── Center panel — timeline ──────────────────────────────────────────────────
 
+function useToggleAi(customerId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ conversationId, aiActive }: { conversationId: string; aiActive: boolean }) =>
+      fetch(`${API_URL}/conversations/${conversationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ aiActive }),
+      }).then((r) => {
+        if (!r.ok) throw new Error("Failed to update conversation");
+        return r.json();
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["timeline", customerId] });
+    },
+  });
+}
+
 function TimelinePanel({ customer, index, customerId, apiCustomer }: { customer: Customer; index: number; customerId: string; apiCustomer?: ApiCustomerDetail }) {
   const [replyChannel, setReplyChannel] = useState<Channel>("whatsapp");
   const { data: apiBlocks, isLoading: timelineLoading } = useTimeline(customerId);
+  const toggleAi = useToggleAi(customerId);
+
   const blocks = useMemo(
     () => apiBlocks ? apiBlocksToFrontend(apiBlocks) : buildTimeline(customer),
     [apiBlocks, customer],
   );
   const assignee = getAssignee(customer.conversations[0]?.assigneeId ?? null);
 
-  const activeConv = useMemo(
-    () =>
-      [...customer.conversations]
-        .filter((c) => c.channel === replyChannel)
-        .sort((a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime())[0],
-    [customer, replyChannel]
-  );
-  const [aiActive, setAiActive] = useState(activeConv?.aiActive ?? true);
-  const canReply = !aiActive && !!activeConv;
+  // Derive per-channel state from real API blocks (last block for each channel)
+  const replyChannels = useMemo(() => {
+    return (["whatsapp", "email"] as Channel[]).map((ch) => {
+      const lastBlock = [...(apiBlocks ?? [])]
+        .filter((b) => b.channel === ch)
+        .at(-1);
+      return {
+        channel: ch,
+        hasConv: !!lastBlock,
+        aiActive: lastBlock?.aiActive ?? true,
+        conversationId: lastBlock?.conversationId ?? "",
+      };
+    });
+  }, [apiBlocks]);
 
-  const replyChannels = (["whatsapp", "email"] as Channel[]).map((ch) => {
-    const conv = [...customer.conversations]
-      .filter((c) => c.channel === ch)
-      .sort((a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime())[0];
-    return { channel: ch, hasConv: !!conv, aiActive: conv?.aiActive ?? true };
-  });
+  const activeChannelState = replyChannels.find((rc) => rc.channel === replyChannel);
+  const canReply = !!activeChannelState?.hasConv && !activeChannelState?.aiActive;
+  const hasReplyableChannel = replyChannels.some((rc) => rc.hasConv);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-[#f9f8f6] min-w-0">
@@ -423,17 +454,14 @@ function TimelinePanel({ customer, index, customerId, apiCustomer }: { customer:
         )}
       </div>
 
-      {/* Reply bar */}
-      <div className="bg-white border-t border-neutral-200 px-4 py-2.5">
+      {/* Reply bar — not shown for voice/onsite-only customers */}
+      {hasReplyableChannel && <div className="bg-white border-t border-neutral-200 px-4 py-2.5">
         {/* Channel tabs */}
         <div className="flex gap-1 mb-2">
-          {replyChannels.map(({ channel, hasConv, aiActive: chAi }) => (
+          {replyChannels.map(({ channel, hasConv }) => (
             <button
               key={channel}
-              onClick={() => {
-                setReplyChannel(channel);
-                setAiActive(chAi);
-              }}
+              onClick={() => setReplyChannel(channel)}
               disabled={!hasConv}
               className={`text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition-colors ${
                 replyChannel === channel
@@ -456,25 +484,30 @@ function TimelinePanel({ customer, index, customerId, apiCustomer }: { customer:
 
           <input
             disabled={!canReply}
-            placeholder={canReply ? "Insert here the message you want to send" : "To reply own, first disable the AI"}
+            placeholder={canReply ? "Insert here the message you want to send" : "To reply, first disable the AI"}
             className="flex-1 text-[13px] bg-transparent focus:outline-none text-neutral-800 placeholder:text-neutral-400 disabled:cursor-not-allowed"
           />
 
           {/* AI toggle */}
           <div className="flex items-center gap-1.5 shrink-0 pl-2 border-l border-neutral-200">
             <span className="text-[11px] text-neutral-500 whitespace-nowrap font-medium">
-              AI {aiActive ? "active" : "not active"}
+              AI {activeChannelState?.aiActive ? "active" : "not active"}
             </span>
             <button
-              onClick={() => setAiActive((v) => !v)}
+              onClick={() => {
+                const state = activeChannelState;
+                if (!state?.conversationId) return;
+                toggleAi.mutate({ conversationId: state.conversationId, aiActive: !state.aiActive });
+              }}
+              disabled={!activeChannelState?.hasConv || toggleAi.isPending}
               aria-label="Toggle AI"
-              className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none ${
-                aiActive ? "bg-primary-500" : "bg-neutral-300"
+              className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none disabled:opacity-50 ${
+                activeChannelState?.aiActive ? "bg-primary-500" : "bg-neutral-300"
               }`}
             >
               <span
                 className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${
-                  aiActive ? "left-[18px]" : "left-0.5"
+                  activeChannelState?.aiActive ? "left-[18px]" : "left-0.5"
                 }`}
               />
             </button>
@@ -487,7 +520,7 @@ function TimelinePanel({ customer, index, customerId, apiCustomer }: { customer:
             <Send className="w-3.5 h-3.5" />
           </button>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

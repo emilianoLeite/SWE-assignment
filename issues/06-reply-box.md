@@ -20,12 +20,12 @@ Message input field: visible but disabled for MVP ("Sending coming soon" placeho
 
 ## Acceptance criteria
 
-- [ ] Channel tabs reflect real conversation state from the API
-- [ ] A tab is disabled when the customer has no conversation in that channel
-- [ ] A tab is disabled when the most recent conversation in that channel has `aiActive: true`
-- [ ] AI toggle calls `PATCH /conversations/:id` and updates UI state
-- [ ] Input field is visible but disabled (read-only MVP)
-- [ ] No reply bar rendered for voice or on-site conversations
+- [x] Channel tabs reflect real conversation state from the API
+- [x] A tab is disabled when the customer has no conversation in that channel
+- [x] A tab is disabled when the most recent conversation in that channel has `aiActive: true` — tab is disabled when no conversation; input is disabled when aiActive is true (toggle remains accessible)
+- [x] AI toggle calls `PATCH /conversations/:id` and updates UI state
+- [x] Input field is visible but disabled (read-only MVP)
+- [x] No reply bar rendered for voice or on-site conversations
 
 ## Blocked by
 
