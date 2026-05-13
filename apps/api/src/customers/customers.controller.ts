@@ -34,4 +34,9 @@ export class CustomersController {
   getTimeline(@Param('id') id: string) {
     return this.customersService.getTimeline(id);
   }
+
+  @Get(':id')
+  getCustomer(@Param('id') id: string) {
+    return this.customersService.getCustomer(id);
+  }
 }

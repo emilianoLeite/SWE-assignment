@@ -312,3 +312,73 @@ describe('GET /customers/:id/timeline (e2e)', () => {
     expect(body).toEqual([]);
   });
 });
+
+describe('GET /customers/:id (e2e)', () => {
+  let app: INestApplication;
+  let mongod: MongoMemoryServer;
+  let CustomerModel: CM;
+
+  beforeAll(async () => {
+    mongod = await MongoMemoryServer.create();
+    const module = await Test.createTestingModule({
+      imports: [
+        MongooseModule.forRoot(mongod.getUri()),
+        CustomersModule,
+      ],
+    }).compile();
+
+    app = module.createNestApplication();
+    await app.init();
+    CustomerModel = module.get<CM>(getModelToken(Customer.name));
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await mongod.stop();
+  });
+
+  beforeEach(async () => {
+    await CustomerModel.deleteMany({});
+  });
+
+  it('returns full customer fields', async () => {
+    const c = await CustomerModel.create({
+      brandId: BRAND,
+      name: 'Lucia',
+      email: 'lucia@example.com',
+      phone: '+39 333 123456',
+      lifetimeSpend: 420.5,
+      tags: ['vip', 'loyal'],
+      notes: 'Prefers morning calls',
+      lastOrder: { id: 'ORD-001', placedAt: new Date('2024-06-01') },
+      lastActivityAt: new Date('2024-06-10'),
+    });
+
+    const { body } = await request(app.getHttpServer())
+      .get(`/customers/${c._id}`)
+      .expect(200);
+
+    expect(body).toMatchObject({
+      name: 'Lucia',
+      email: 'lucia@example.com',
+      phone: '+39 333 123456',
+      lifetimeSpend: 420.5,
+      tags: ['vip', 'loyal'],
+      notes: 'Prefers morning calls',
+      createdAt: expect.any(String),
+    });
+    expect(body.lastOrder).toMatchObject({ id: 'ORD-001', placedAt: expect.any(String) });
+  });
+
+  it('returns 404 for unknown customer id', async () => {
+    await request(app.getHttpServer())
+      .get(`/customers/${new Types.ObjectId()}`)
+      .expect(404);
+  });
+
+  it('returns 400 for invalid id', async () => {
+    await request(app.getHttpServer())
+      .get('/customers/not-an-id')
+      .expect(400);
+  });
+});

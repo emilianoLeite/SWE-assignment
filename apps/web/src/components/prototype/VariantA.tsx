@@ -24,6 +24,18 @@ interface ApiCustomer {
   urgencyStatus: "ai_controlled" | "to_manage" | "managed" | "blocked" | "human_controlled";
 }
 
+interface ApiCustomerDetail {
+  _id: string;
+  name: string;
+  email: string;
+  phone: string;
+  lifetimeSpend: number;
+  tags: string[];
+  notes: string | null;
+  lastOrder: { id: string; placedAt: string } | null;
+  createdAt: string;
+}
+
 interface ApiTimelineBlock {
   channel: Channel;
   conversationId: string;
@@ -51,6 +63,18 @@ function useCustomers() {
         if (!r.ok) throw new Error("Failed to fetch customers");
         return r.json();
       }),
+  });
+}
+
+function useCustomerDetail(customerId: string) {
+  return useQuery<ApiCustomerDetail>({
+    queryKey: ["customer", customerId],
+    queryFn: () =>
+      fetch(`${API_URL}/customers/${customerId}`).then((r) => {
+        if (!r.ok) throw new Error("Failed to fetch customer");
+        return r.json();
+      }),
+    enabled: !!customerId,
   });
 }
 
@@ -322,7 +346,7 @@ function ConversationBlock({ block }: { block: ConversationBlock }) {
 
 // ─── Center panel — timeline ──────────────────────────────────────────────────
 
-function TimelinePanel({ customer, index, customerId }: { customer: Customer; index: number; customerId: string }) {
+function TimelinePanel({ customer, index, customerId, apiCustomer }: { customer: Customer; index: number; customerId: string; apiCustomer?: ApiCustomerDetail }) {
   const [replyChannel, setReplyChannel] = useState<Channel>("whatsapp");
   const { data: apiBlocks, isLoading: timelineLoading } = useTimeline(customerId);
   const blocks = useMemo(
@@ -356,10 +380,10 @@ function TimelinePanel({ customer, index, customerId }: { customer: Customer; in
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[15px] font-semibold text-neutral-900 truncate">
-                {customer.name}
+                {apiCustomer?.name ?? customer.name}
               </span>
               <span className="text-neutral-400 text-sm">·</span>
-              <span className="text-[13px] text-neutral-500">{customer.phone}</span>
+              <span className="text-[13px] text-neutral-500">{apiCustomer?.phone ?? customer.phone}</span>
             </div>
             <div className="flex items-center gap-2 mt-1.5">
               <button className="flex items-center gap-1 text-[12px] text-neutral-600 border border-neutral-300 rounded-md px-2 py-0.5 hover:bg-neutral-50 transition-colors font-medium">
@@ -486,8 +510,26 @@ function Field({ label, value, copyable }: { label: string; value: string; copya
   );
 }
 
-function CustomerDetailsPanel({ customer }: { customer: Customer }) {
-  const createdDaysAgo = Math.round((Date.now() - new Date(customer.createdAt).getTime()) / 86_400_000);
+function CustomerDetailsPanel({ customer, isLoading }: { customer: ApiCustomerDetail | undefined; isLoading: boolean }) {
+  const createdDaysAgo = customer
+    ? Math.round((Date.now() - new Date(customer.createdAt).getTime()) / 86_400_000)
+    : 0;
+
+  if (isLoading) {
+    return (
+      <div className="w-60 shrink-0 border-l border-neutral-200 bg-white flex items-center justify-center">
+        <span className="text-[13px] text-neutral-400">Loading…</span>
+      </div>
+    );
+  }
+
+  if (!customer) {
+    return (
+      <div className="w-60 shrink-0 border-l border-neutral-200 bg-white flex items-center justify-center">
+        <span className="text-[13px] text-neutral-400">Select a customer</span>
+      </div>
+    );
+  }
 
   return (
     <div className="w-60 shrink-0 border-l border-neutral-200 bg-white flex flex-col overflow-y-auto">
@@ -501,8 +543,8 @@ function CustomerDetailsPanel({ customer }: { customer: Customer }) {
 
       {/* Contact fields */}
       <div className="px-4 divide-y divide-neutral-100">
-        <Field label="Email" value={customer.email} copyable />
-        <Field label="Phone number" value={customer.phone} copyable />
+        <Field label="Email" value={customer.email ?? "—"} copyable />
+        <Field label="Phone number" value={customer.phone ?? "—"} copyable />
         <Field label="Customer for" value={`${createdDaysAgo} days`} />
         <Field
           label="Lifetime spend"
@@ -546,7 +588,6 @@ function CustomerDetailsPanel({ customer }: { customer: Customer }) {
           <div className="bg-neutral-50 rounded-lg px-3 py-2 border border-neutral-100">
             <p className="text-[12px] font-semibold text-neutral-800">{customer.lastOrder.id}</p>
             <p className="text-[11px] text-neutral-500 mt-0.5">
-              €{customer.lastOrder.amount} ·{" "}
               {new Date(customer.lastOrder.placedAt).toLocaleDateString("it-IT", {
                 day: "numeric",
                 month: "short",
@@ -586,7 +627,9 @@ export default function VariantA() {
   const [selectedId, setSelectedId] = useState<string>("");
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  // Header/reply-bar and right panel still use seed data until issue #05
+  const { data: apiCustomer, isLoading: detailLoading } = useCustomerDetail(selectedId);
+
+  // Reply bar still uses seed data until issue #06
   const seedCustomer = CUSTOMERS[selectedIndex % CUSTOMERS.length];
 
   function handleSelect(id: string, index: number) {
@@ -599,8 +642,8 @@ export default function VariantA() {
       <PageHeader />
       <div className="flex flex-1 overflow-hidden">
         <CustomerList selectedId={selectedId} onSelect={handleSelect} />
-        <TimelinePanel customer={seedCustomer} index={selectedIndex} customerId={selectedId} />
-        <CustomerDetailsPanel customer={seedCustomer} />
+        <TimelinePanel customer={seedCustomer} index={selectedIndex} customerId={selectedId} apiCustomer={apiCustomer} />
+        <CustomerDetailsPanel customer={apiCustomer} isLoading={!!selectedId && detailLoading} />
       </div>
     </div>
   );

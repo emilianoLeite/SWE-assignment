@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, PipelineStage } from 'mongoose';
 import {
@@ -72,9 +72,22 @@ export interface TimelineBlock {
   messages: TimelineMessage[];
 }
 
+export interface CustomerDetail {
+  _id: string;
+  name: string;
+  email: string;
+  phone: string;
+  lifetimeSpend: number;
+  tags: string[];
+  notes: string;
+  lastOrder: { id: string; placedAt: Date } | null;
+  createdAt: Date;
+}
+
 @Injectable()
 export class CustomersService {
   constructor(
+    @InjectModel(Customer.name) private readonly customerModel: Model<CustomerDocument>,
     @InjectModel(Conversation.name) private readonly convModel: Model<ConversationDocument>,
     @InjectModel(Message.name) private readonly messageModel: Model<MessageDocument>,
   ) {}
@@ -156,6 +169,25 @@ export class CustomersService {
     ];
 
     return this.convModel.aggregate<CustomerListItem>(pipeline);
+  }
+
+  async getCustomer(customerId: string): Promise<CustomerDetail> {
+    if (!Types.ObjectId.isValid(customerId)) {
+      throw new BadRequestException('Invalid customerId');
+    }
+    const doc = await this.customerModel.findById(customerId).lean();
+    if (!doc) throw new NotFoundException('Customer not found');
+    return {
+      _id: (doc._id as Types.ObjectId).toString(),
+      name: doc.name,
+      email: doc.email,
+      phone: doc.phone,
+      lifetimeSpend: doc.lifetimeSpend,
+      tags: doc.tags,
+      notes: doc.notes,
+      lastOrder: doc.lastOrder ?? null,
+      createdAt: (doc as unknown as { createdAt: Date }).createdAt,
+    };
   }
 
   async getTimeline(customerId: string): Promise<TimelineBlock[]> {
