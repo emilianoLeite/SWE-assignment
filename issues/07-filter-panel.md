@@ -24,14 +24,14 @@ Layout matches `mockups/status_filter.png`, `mockups/campaing_filter.png`, `mock
 
 ## Acceptance criteria
 
-- [ ] `GET /operators` returns all seeded operators
-- [ ] `GET /conversations/campaigns` returns distinct campaign values
-- [ ] Status filter narrows customer list to customers with at least one matching conversation
-- [ ] Assignee filter narrows to customers with at least one conversation assigned to that operator
-- [ ] Tags filter narrows to customers whose `tags[]` includes the selected value
-- [ ] Campaign filter narrows to customers with at least one conversation matching the campaign
-- [ ] Last Activity date range filters by `customer.lastActivityAt`
-- [ ] Filter state is reflected in URL search params
+- [x] `GET /operators` returns all seeded operators
+- [x] `GET /conversations/campaigns` returns distinct campaign values
+- [x] Status filter narrows customer list to customers with at least one matching conversation
+- [x] Assignee filter narrows to customers with at least one conversation assigned to that operator
+- [x] Tags filter narrows to customers whose `tags[]` includes the selected value
+- [x] Campaign filter narrows to customers with at least one conversation matching the campaign
+- [x] Last Activity date range filters by `customer.lastActivityAt`
+- [x] Filter state is reflected in URL search params
 
 ## Blocked by
 

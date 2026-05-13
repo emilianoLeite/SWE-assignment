@@ -39,6 +39,7 @@ export interface CustomerListItem {
   name: string;
   lastActivityAt: Date;
   urgencyStatus: string;
+  tags: string[];
 }
 
 export interface FindCustomersParams {
@@ -165,6 +166,7 @@ export class CustomersService {
           name: '$customer.name',
           lastActivityAt: '$customer.lastActivityAt',
           urgencyStatus: 1,
+          tags: '$customer.tags',
         },
       },
     ];

@@ -3,10 +3,11 @@
 // Variant A — Three-column: customer list | timeline | customer details panel
 // Styled to match the TextYess product mockups.
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams, useRouter } from "next/navigation";
 import {
-  Search, Filter, Tag, Ban, UserPlus, Copy,
+  Search, Filter, Ban, UserPlus, Copy,
   ExternalLink, Paperclip, Smile, Send, Plus,
 } from "lucide-react";
 import { CUSTOMERS, OPERATORS, type Customer, type Channel } from "./seed-data";
@@ -22,6 +23,7 @@ interface ApiCustomer {
   name: string;
   lastActivityAt: string;
   urgencyStatus: "ai_controlled" | "to_manage" | "managed" | "blocked" | "human_controlled";
+  tags: string[];
 }
 
 interface ApiCustomerDetail {
@@ -56,12 +58,51 @@ interface ApiTimelineBlock {
   }>;
 }
 
-function useCustomers() {
+interface FilterParams {
+  status?: string;
+  assigneeId?: string;
+  tags?: string[];
+  campaign?: string;
+  from?: string;
+  to?: string;
+}
+
+function useCustomers(filters: FilterParams = {}) {
+  const params = new URLSearchParams({ brandId: BRAND_ID });
+  if (filters.status) params.set("status", filters.status);
+  if (filters.assigneeId) params.set("assigneeId", filters.assigneeId);
+  if (filters.tags?.length) filters.tags.forEach((t) => params.append("tags", t));
+  if (filters.campaign) params.set("campaign", filters.campaign);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+
   return useQuery<ApiCustomer[]>({
-    queryKey: ["customers", BRAND_ID],
+    queryKey: ["customers", BRAND_ID, filters],
     queryFn: () =>
-      fetch(`${API_URL}/customers?brandId=${BRAND_ID}`).then((r) => {
+      fetch(`${API_URL}/customers?${params.toString()}`).then((r) => {
         if (!r.ok) throw new Error("Failed to fetch customers");
+        return r.json();
+      }),
+  });
+}
+
+function useOperators() {
+  return useQuery<{ _id: string; name: string }[]>({
+    queryKey: ["operators"],
+    queryFn: () =>
+      fetch(`${API_URL}/operators`).then((r) => {
+        if (!r.ok) throw new Error("Failed to fetch operators");
+        return r.json();
+      }),
+  });
+}
+
+function useCampaigns() {
+  return useQuery<string[]>({
+    queryKey: ["campaigns", BRAND_ID],
+    queryFn: () =>
+      fetch(`${API_URL}/conversations/campaigns?brandId=${BRAND_ID}`).then((r) => {
+        if (!r.ok) throw new Error("Failed to fetch campaigns");
         return r.json();
       }),
   });
@@ -216,10 +257,180 @@ function getAssignee(id: string | null) {
   return OPERATORS.find((o) => o.id === id) ?? null;
 }
 
+// ─── Filter panel ─────────────────────────────────────────────────────────────
+
+const STATUS_OPTIONS = [
+  { value: "ai_controlled", label: "AI controlled" },
+  { value: "to_manage", label: "To manage" },
+  { value: "managed", label: "Managed" },
+  { value: "blocked", label: "Blocked" },
+];
+
+function FilterPanel({
+  filters,
+  onFiltersChange,
+  customers,
+}: {
+  filters: FilterParams;
+  onFiltersChange: (f: FilterParams) => void;
+  customers: ApiCustomer[] | undefined;
+}) {
+  const { data: operators } = useOperators();
+  const { data: campaigns } = useCampaigns();
+
+  const availableTags = useMemo(() => {
+    if (!customers) return [];
+    return Array.from(new Set(customers.flatMap((c) => c.tags ?? []))).sort();
+  }, [customers]);
+
+  function setFilter<K extends keyof FilterParams>(key: K, value: FilterParams[K] | undefined) {
+    const next = { ...filters };
+    if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) {
+      delete next[key];
+    } else {
+      next[key] = value;
+    }
+    onFiltersChange(next);
+  }
+
+  function toggleTag(tag: string) {
+    const current = filters.tags ?? [];
+    const next = current.includes(tag) ? current.filter((t) => t !== tag) : [...current, tag];
+    setFilter("tags", next.length ? next : undefined);
+  }
+
+  const activeCount = Object.keys(filters).length;
+
+  return (
+    <div className="border-b border-neutral-100 bg-neutral-50 px-3 py-2.5 space-y-2.5">
+      {/* Status */}
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400 mb-1.5">Status</p>
+        <div className="flex flex-wrap gap-1">
+          {STATUS_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setFilter("status", filters.status === opt.value ? undefined : opt.value)}
+              className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors font-medium ${
+                filters.status === opt.value
+                  ? "bg-primary-500 text-white border-primary-500"
+                  : "bg-white text-neutral-500 border-neutral-200 hover:border-neutral-300"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Assignee */}
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400 mb-1.5">Assignee</p>
+        <select
+          value={filters.assigneeId ?? ""}
+          onChange={(e) => setFilter("assigneeId", e.target.value || undefined)}
+          className="w-full text-[12px] border border-neutral-200 rounded-lg px-2.5 py-1.5 bg-white text-neutral-700 focus:outline-none focus:ring-2 focus:ring-primary-200"
+        >
+          <option value="">All assignees</option>
+          <option value="unassigned">Unassigned</option>
+          {operators?.map((op) => (
+            <option key={op._id} value={op._id}>{op.name}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Tags */}
+      {availableTags.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400 mb-1.5">Tags</p>
+          <div className="flex flex-wrap gap-1">
+            {availableTags.map((tag) => {
+              const active = filters.tags?.includes(tag);
+              return (
+                <button
+                  key={tag}
+                  onClick={() => toggleTag(tag)}
+                  className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors font-medium ${
+                    active
+                      ? "bg-primary-500 text-white border-primary-500"
+                      : "bg-white text-neutral-500 border-neutral-200 hover:border-neutral-300"
+                  }`}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Campaign */}
+      {campaigns && campaigns.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400 mb-1.5">Campaign</p>
+          <select
+            value={filters.campaign ?? ""}
+            onChange={(e) => setFilter("campaign", e.target.value || undefined)}
+            className="w-full text-[12px] border border-neutral-200 rounded-lg px-2.5 py-1.5 bg-white text-neutral-700 focus:outline-none focus:ring-2 focus:ring-primary-200"
+          >
+            <option value="">All campaigns</option>
+            {campaigns.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Last Activity */}
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400 mb-1.5">Last Activity</p>
+        <div className="flex gap-1.5 items-center">
+          <input
+            type="date"
+            value={filters.from ?? ""}
+            onChange={(e) => setFilter("from", e.target.value || undefined)}
+            className="flex-1 text-[11px] border border-neutral-200 rounded-lg px-2 py-1.5 bg-white text-neutral-700 focus:outline-none focus:ring-2 focus:ring-primary-200"
+          />
+          <span className="text-[10px] text-neutral-400 shrink-0">to</span>
+          <input
+            type="date"
+            value={filters.to ?? ""}
+            onChange={(e) => setFilter("to", e.target.value || undefined)}
+            className="flex-1 text-[11px] border border-neutral-200 rounded-lg px-2 py-1.5 bg-white text-neutral-700 focus:outline-none focus:ring-2 focus:ring-primary-200"
+          />
+        </div>
+      </div>
+
+      {/* Clear all */}
+      {activeCount > 0 && (
+        <button
+          onClick={() => onFiltersChange({})}
+          className="text-[11px] text-destructive-500 hover:text-destructive-700 font-medium"
+        >
+          Clear all filters
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── Left panel ───────────────────────────────────────────────────────────────
 
-function CustomerList({ selectedId, onSelect }: { selectedId: string; onSelect: (id: string, index: number) => void }) {
-  const { data: customers, isLoading, isError } = useCustomers();
+function CustomerList({
+  selectedId,
+  onSelect,
+  filters,
+  onFiltersChange,
+}: {
+  selectedId: string;
+  onSelect: (id: string, index: number) => void;
+  filters: FilterParams;
+  onFiltersChange: (f: FilterParams) => void;
+}) {
+  const [showFilters, setShowFilters] = useState(false);
+  const { data: customers, isLoading, isError } = useCustomers(filters);
+
+  const activeFilterCount = Object.keys(filters).length;
 
   return (
     <div className="w-[272px] shrink-0 border-r border-neutral-200 flex flex-col bg-white">
@@ -232,11 +443,28 @@ function CustomerList({ selectedId, onSelect }: { selectedId: string; onSelect: 
             className="w-full text-xs pl-7 pr-2 py-1.5 bg-neutral-100 rounded-lg border-0 focus:outline-none focus:ring-2 focus:ring-primary-200 placeholder:text-neutral-400"
           />
         </div>
-        <button className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-700 border border-neutral-200 rounded-lg px-2.5 py-1.5 hover:bg-neutral-50 transition-colors shrink-0">
+        <button
+          onClick={() => setShowFilters((v) => !v)}
+          className={`flex items-center gap-1 text-xs border rounded-lg px-2.5 py-1.5 transition-colors shrink-0 ${
+            activeFilterCount > 0
+              ? "bg-primary-50 text-primary-600 border-primary-300 hover:bg-primary-100"
+              : "text-neutral-500 hover:text-neutral-700 border-neutral-200 hover:bg-neutral-50"
+          }`}
+        >
           <Filter className="w-3 h-3" />
           Filter
+          {activeFilterCount > 0 && (
+            <span className="ml-0.5 w-4 h-4 rounded-full bg-primary-500 text-white text-[9px] flex items-center justify-center font-bold">
+              {activeFilterCount}
+            </span>
+          )}
         </button>
       </div>
+
+      {/* Filter panel */}
+      {showFilters && (
+        <FilterPanel filters={filters} onFiltersChange={onFiltersChange} customers={customers} />
+      )}
 
       {/* Customer rows */}
       <div className="flex-1 overflow-y-auto">
@@ -245,6 +473,9 @@ function CustomerList({ selectedId, onSelect }: { selectedId: string; onSelect: 
         )}
         {isError && (
           <div className="px-4 py-8 text-center text-[13px] text-destructive-500">Failed to load customers</div>
+        )}
+        {!isLoading && !isError && customers?.length === 0 && (
+          <div className="px-4 py-8 text-center text-[13px] text-neutral-400">No customers match the selected filters</div>
         )}
         {customers?.map((customer, i) => {
           const selected = customer._id === selectedId;
@@ -656,13 +887,46 @@ function PageHeader() {
 
 // ─── Variant A root ───────────────────────────────────────────────────────────
 
+function filtersFromSearchParams(sp: ReturnType<typeof useSearchParams>): FilterParams {
+  const filters: FilterParams = {};
+  const status = sp.get("status");
+  if (status) filters.status = status;
+  const assigneeId = sp.get("assigneeId");
+  if (assigneeId) filters.assigneeId = assigneeId;
+  const tags = sp.getAll("tags");
+  if (tags.length) filters.tags = tags;
+  const campaign = sp.get("campaign");
+  if (campaign) filters.campaign = campaign;
+  const from = sp.get("from");
+  if (from) filters.from = from;
+  const to = sp.get("to");
+  if (to) filters.to = to;
+  return filters;
+}
+
 export default function VariantA() {
   const [selectedId, setSelectedId] = useState<string>("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  const filters = useMemo(() => filtersFromSearchParams(searchParams), [searchParams]);
+
+  const handleFiltersChange = useCallback((next: FilterParams) => {
+    const sp = new URLSearchParams();
+    const variant = searchParams.get("variant");
+    if (variant) sp.set("variant", variant);
+    if (next.status) sp.set("status", next.status);
+    if (next.assigneeId) sp.set("assigneeId", next.assigneeId);
+    if (next.tags?.length) next.tags.forEach((t) => sp.append("tags", t));
+    if (next.campaign) sp.set("campaign", next.campaign);
+    if (next.from) sp.set("from", next.from);
+    if (next.to) sp.set("to", next.to);
+    router.replace(`?${sp.toString()}`);
+  }, [searchParams, router]);
 
   const { data: apiCustomer, isLoading: detailLoading } = useCustomerDetail(selectedId);
 
-  // Reply bar still uses seed data until issue #06
   const seedCustomer = CUSTOMERS[selectedIndex % CUSTOMERS.length];
 
   function handleSelect(id: string, index: number) {
@@ -674,7 +938,12 @@ export default function VariantA() {
     <div className="flex flex-col flex-1 overflow-hidden">
       <PageHeader />
       <div className="flex flex-1 overflow-hidden">
-        <CustomerList selectedId={selectedId} onSelect={handleSelect} />
+        <CustomerList
+          selectedId={selectedId}
+          onSelect={handleSelect}
+          filters={filters}
+          onFiltersChange={handleFiltersChange}
+        />
         <TimelinePanel customer={seedCustomer} index={selectedIndex} customerId={selectedId} apiCustomer={apiCustomer} />
         <CustomerDetailsPanel customer={apiCustomer} isLoading={!!selectedId && detailLoading} />
       </div>

@@ -21,3 +21,9 @@
 - **Track the most-recent conversation state when merging timeline blocks** — the timeline service merges same-channel consecutive messages across multiple conversations into one visual block. When merging, update `conversationId` and `aiActive` to the latest entry's conversation so the frontend always sees the current state of the most recent conversation in that channel, not the one that started the block.
 
 - **`useMutation` + `invalidateQueries` is the clean pattern for toggles** — when a PATCH endpoint updates a resource that's also loaded via `useQuery`, call `queryClient.invalidateQueries({ queryKey: [...] })` in `onSuccess` to re-fetch. This avoids manually reconciling optimistic state and keeps the query cache as the single source of truth.
+
+- **`GET` route must be declared before `PATCH /:id` in NestJS** — adding `@Get('campaigns')` to the ConversationsController required placing it before `@Patch(':id')`. NestJS matches in registration order; a param route like `:id` would swallow a sibling literal segment like `campaigns` if declared first. The same principle applies whenever a literal sub-path coexists with a wildcard param segment.
+
+- **Derive filter tag options from the customer list response rather than a separate endpoint** — `GET /customers` already aggregates per-customer data; adding `tags: '$customer.tags'` to the `$project` stage lets the frontend extract distinct tags from the already-loaded list. No new endpoint, no extra round trip.
+
+- **Filter state in URL search params via `router.replace`** — use `useSearchParams` (read) + `router.replace` (write) from `next/navigation` to keep filter state in the URL. Always preserve unrelated params (e.g. `?variant=A`) when building the new search string. `router.replace` avoids polluting browser history on each filter change.
