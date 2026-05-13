@@ -5,14 +5,14 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import request from 'supertest';
 import { Types, Model } from 'mongoose';
 import { CustomersModule } from '../src/customers/customers.module';
-import { Customer } from '@textyess/models';
-import { Conversation } from '@textyess/models';
+import { Customer, Conversation, Message } from '@textyess/models';
 
 const BRAND = new Types.ObjectId('aaaaaaaaaaaaaaaaaaaaaaaa');
 const OTHER_BRAND = new Types.ObjectId('bbbbbbbbbbbbbbbbbbbbbbbb');
 
 type CM = Model<Customer>;
 type ConvM = Model<Conversation>;
+type MsgM = Model<Message>;
 
 describe('GET /customers (e2e)', () => {
   let app: INestApplication;
@@ -162,5 +162,153 @@ describe('GET /customers (e2e)', () => {
 
   it('returns 400 when brandId is missing', async () => {
     await request(app.getHttpServer()).get('/customers').expect(400);
+  });
+});
+
+describe('GET /customers/:id/timeline (e2e)', () => {
+  let app: INestApplication;
+  let mongod: MongoMemoryServer;
+  let CustomerModel: CM;
+  let ConvModel: ConvM;
+  let MsgModel: MsgM;
+
+  beforeAll(async () => {
+    mongod = await MongoMemoryServer.create();
+    const module = await Test.createTestingModule({
+      imports: [
+        MongooseModule.forRoot(mongod.getUri()),
+        CustomersModule,
+      ],
+    }).compile();
+
+    app = module.createNestApplication();
+    await app.init();
+    CustomerModel = module.get<CM>(getModelToken(Customer.name));
+    ConvModel = module.get<ConvM>(getModelToken(Conversation.name));
+    MsgModel = module.get<MsgM>(getModelToken(Message.name));
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await mongod.stop();
+  });
+
+  beforeEach(async () => {
+    await CustomerModel.deleteMany({});
+    await ConvModel.deleteMany({});
+    await MsgModel.deleteMany({});
+  });
+
+  // ── RED 1: basic chronological order ────────────────────────────────────
+
+  it('returns timeline blocks in chronological order', async () => {
+    const customer = await CustomerModel.create({
+      brandId: BRAND, name: 'Giulia', lastActivityAt: new Date('2024-02-10'),
+    });
+
+    const conv1 = await ConvModel.create({
+      brandId: BRAND, customerId: customer._id, channel: 'whatsapp',
+      status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-02-05'),
+    });
+    const conv2 = await ConvModel.create({
+      brandId: BRAND, customerId: customer._id, channel: 'email',
+      status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-02-10'),
+    });
+
+    await MsgModel.insertMany([
+      { conversationId: conv1._id, sentBy: 'customer', content: 'Ciao!', type: 'text', sentAt: new Date('2024-02-05T10:00:00Z') },
+      { conversationId: conv2._id, sentBy: 'ai', content: 'Hello via email', type: 'text', sentAt: new Date('2024-02-10T09:00:00Z') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get(`/customers/${customer._id}/timeline`)
+      .expect(200);
+
+    expect(body).toHaveLength(2);
+    expect(body[0].channel).toBe('whatsapp');
+    expect(body[1].channel).toBe('email');
+  });
+
+  // ── RED 2: consecutive same-channel messages merged into one block ───────
+
+  it('merges consecutive same-channel messages into one block', async () => {
+    const customer = await CustomerModel.create({
+      brandId: BRAND, name: 'Marco', lastActivityAt: new Date('2024-03-10'),
+    });
+
+    const conv1 = await ConvModel.create({
+      brandId: BRAND, customerId: customer._id, channel: 'whatsapp',
+      status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-03-05'),
+    });
+    const conv2 = await ConvModel.create({
+      brandId: BRAND, customerId: customer._id, channel: 'whatsapp',
+      status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-03-10'),
+    });
+
+    await MsgModel.insertMany([
+      { conversationId: conv1._id, sentBy: 'customer', content: 'First', type: 'text', sentAt: new Date('2024-03-05T10:00:00Z') },
+      { conversationId: conv2._id, sentBy: 'ai', content: 'Second', type: 'text', sentAt: new Date('2024-03-10T09:00:00Z') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get(`/customers/${customer._id}/timeline`)
+      .expect(200);
+
+    expect(body).toHaveLength(1);
+    expect(body[0].channel).toBe('whatsapp');
+    expect(body[0].messages).toHaveLength(2);
+    expect(body[0].messages[0].content).toBe('First');
+    expect(body[0].messages[1].content).toBe('Second');
+  });
+
+  // ── RED 3: voice block has transcript, empty messages ────────────────────
+
+  it('returns voice block with transcript and no messages', async () => {
+    const customer = await CustomerModel.create({
+      brandId: BRAND, name: 'Sofia', lastActivityAt: new Date('2024-04-01'),
+    });
+
+    await ConvModel.create({
+      brandId: BRAND, customerId: customer._id, channel: 'voice',
+      status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-04-01'),
+      channelData: {
+        duration: '3:45',
+        outcome: 'Successful',
+        transcript: [
+          { speaker: 'ai', text: 'Buongiorno!' },
+          { speaker: 'customer', text: 'Salve.' },
+        ],
+      },
+    });
+
+    const { body } = await request(app.getHttpServer())
+      .get(`/customers/${customer._id}/timeline`)
+      .expect(200);
+
+    expect(body).toHaveLength(1);
+    expect(body[0].channel).toBe('voice');
+    expect(body[0].messages).toHaveLength(0);
+    expect(body[0].channelData.duration).toBe('3:45');
+    expect(body[0].channelData.outcome).toBe('Successful');
+    expect(body[0].channelData.transcript).toHaveLength(2);
+    expect(body[0].channelData.transcript[0]).toEqual({ speaker: 'ai', text: 'Buongiorno!' });
+  });
+
+  // ── RED 4: invalid customerId → 400 ──────────────────────────────────────
+
+  it('returns 400 for invalid customerId', async () => {
+    await request(app.getHttpServer())
+      .get('/customers/not-an-id/timeline')
+      .expect(400);
+  });
+
+  // ── RED 5: unknown customerId → empty array ───────────────────────────────
+
+  it('returns empty array for unknown customerId', async () => {
+    const { body } = await request(app.getHttpServer())
+      .get(`/customers/${new Types.ObjectId()}/timeline`)
+      .expect(200);
+
+    expect(body).toEqual([]);
   });
 });

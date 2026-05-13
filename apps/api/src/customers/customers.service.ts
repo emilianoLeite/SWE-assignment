@@ -1,7 +1,12 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, PipelineStage } from 'mongoose';
-import { Conversation, ConversationDocument, Customer, CustomerDocument } from '@textyess/models';
+import {
+  Conversation, ConversationDocument,
+  Customer, CustomerDocument,
+  Message, MessageDocument,
+} from '@textyess/models';
+import type { Channel, SentBy, MessageType } from '@textyess/models';
 
 const URGENCY_RANK: PipelineStage.AddFields['$addFields'] = {
   $switch: {
@@ -46,10 +51,32 @@ export interface FindCustomersParams {
   to?: string;
 }
 
+export interface TimelineMessage {
+  _id: string;
+  sentBy: SentBy;
+  content: string;
+  type: MessageType;
+  sentAt: Date;
+}
+
+export interface TimelineBlock {
+  channel: Channel;
+  conversationId: string;
+  blockStart: Date;
+  channelData: {
+    subject?: string;
+    duration?: string;
+    outcome?: string;
+    transcript?: Array<{ speaker: 'ai' | 'customer'; text: string }>;
+  };
+  messages: TimelineMessage[];
+}
+
 @Injectable()
 export class CustomersService {
   constructor(
     @InjectModel(Conversation.name) private readonly convModel: Model<ConversationDocument>,
+    @InjectModel(Message.name) private readonly messageModel: Model<MessageDocument>,
   ) {}
 
   async findCustomers(params: FindCustomersParams): Promise<CustomerListItem[]> {
@@ -129,5 +156,95 @@ export class CustomersService {
     ];
 
     return this.convModel.aggregate<CustomerListItem>(pipeline);
+  }
+
+  async getTimeline(customerId: string): Promise<TimelineBlock[]> {
+    if (!Types.ObjectId.isValid(customerId)) {
+      throw new BadRequestException('Invalid customerId');
+    }
+
+    const customerOid = new Types.ObjectId(customerId);
+
+    const conversations = await this.convModel
+      .find({ customerId: customerOid })
+      .lean();
+
+    if (conversations.length === 0) return [];
+
+    const convIds = conversations.map((c) => c._id);
+    const convMap = new Map(conversations.map((c) => [c._id.toString(), c]));
+
+    const messages = await this.messageModel
+      .find({ conversationId: { $in: convIds } })
+      .sort({ sentAt: 1 })
+      .lean();
+
+    interface RawEntry {
+      sortKey: Date;
+      convId: string;
+      channel: Channel;
+      message?: TimelineMessage;
+      isVoice: boolean;
+    }
+
+    const entries: RawEntry[] = [];
+
+    for (const conv of conversations) {
+      if (conv.channel === 'voice') {
+        entries.push({
+          sortKey: conv.lastActivityAt,
+          convId: conv._id.toString(),
+          channel: conv.channel,
+          isVoice: true,
+        });
+      }
+    }
+
+    for (const msg of messages) {
+      const conv = convMap.get(msg.conversationId.toString());
+      if (!conv || conv.channel === 'voice') continue;
+      entries.push({
+        sortKey: msg.sentAt,
+        convId: conv._id.toString(),
+        channel: conv.channel,
+        message: {
+          _id: (msg._id as Types.ObjectId).toString(),
+          sentBy: msg.sentBy,
+          content: msg.content,
+          type: msg.type,
+          sentAt: msg.sentAt,
+        },
+        isVoice: false,
+      });
+    }
+
+    entries.sort((a, b) => a.sortKey.getTime() - b.sortKey.getTime());
+
+    const blocks: TimelineBlock[] = [];
+
+    for (const entry of entries) {
+      const last = blocks[blocks.length - 1];
+      if (last && last.channel === entry.channel) {
+        if (!entry.isVoice && entry.message) {
+          last.messages.push(entry.message);
+        }
+      } else {
+        const conv = convMap.get(entry.convId)!;
+        blocks.push({
+          channel: entry.channel,
+          conversationId: entry.convId,
+          blockStart: entry.sortKey,
+          channelData: {
+            subject: conv.channelData?.subject,
+            duration: conv.channelData?.duration,
+            outcome: conv.channelData?.outcome,
+            transcript: conv.channelData?.transcript as Array<{ speaker: 'ai' | 'customer'; text: string }> | undefined,
+          },
+          messages: entry.isVoice ? [] : (entry.message ? [entry.message] : []),
+        });
+      }
+    }
+
+    return blocks;
   }
 }

@@ -1,4 +1,4 @@
-import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Query } from '@nestjs/common';
 import { CustomersService } from './customers.service';
 
 @Controller('customers')
@@ -28,5 +28,10 @@ export class CustomersController {
       from,
       to,
     });
+  }
+
+  @Get(':id/timeline')
+  getTimeline(@Param('id') id: string) {
+    return this.customersService.getTimeline(id);
   }
 }

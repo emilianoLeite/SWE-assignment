@@ -24,6 +24,25 @@ interface ApiCustomer {
   urgencyStatus: "ai_controlled" | "to_manage" | "managed" | "blocked" | "human_controlled";
 }
 
+interface ApiTimelineBlock {
+  channel: Channel;
+  conversationId: string;
+  blockStart: string;
+  channelData: {
+    subject?: string;
+    duration?: string;
+    outcome?: string;
+    transcript?: Array<{ speaker: "ai" | "customer"; text: string }>;
+  };
+  messages: Array<{
+    _id: string;
+    sentBy: "customer" | "ai" | "operator";
+    content: string;
+    type: string;
+    sentAt: string;
+  }>;
+}
+
 function useCustomers() {
   return useQuery<ApiCustomer[]>({
     queryKey: ["customers", BRAND_ID],
@@ -32,6 +51,60 @@ function useCustomers() {
         if (!r.ok) throw new Error("Failed to fetch customers");
         return r.json();
       }),
+  });
+}
+
+function useTimeline(customerId: string) {
+  return useQuery<ApiTimelineBlock[]>({
+    queryKey: ["timeline", customerId],
+    queryFn: () =>
+      fetch(`${API_URL}/customers/${customerId}/timeline`).then((r) => {
+        if (!r.ok) throw new Error("Failed to fetch timeline");
+        return r.json();
+      }),
+    enabled: !!customerId,
+  });
+}
+
+function apiBlocksToFrontend(apiBlocks: ApiTimelineBlock[]): ConversationBlock[] {
+  return apiBlocks.map((block) => {
+    if (block.channel === "voice") {
+      return {
+        channel: "voice",
+        entries: [{
+          channel: "voice" as Channel,
+          sentBy: "ai" as const,
+          content: "",
+          sentAt: block.blockStart,
+          isTranscript: true,
+          transcriptLines: block.channelData.transcript ?? [],
+          voiceMeta: {
+            duration: block.channelData.duration ?? "0:00",
+            outcome: block.channelData.outcome ?? "—",
+          },
+        }],
+        voiceMeta: {
+          duration: block.channelData.duration ?? "0:00",
+          outcome: block.channelData.outcome ?? "—",
+        },
+        blockStart: block.blockStart,
+      };
+    }
+
+    const entries: TimelineEntry[] = block.messages.map((msg) => ({
+      channel: block.channel,
+      sentBy: msg.sentBy,
+      content: msg.content,
+      sentAt: msg.sentAt,
+      emailSubject: block.channelData.subject,
+    }));
+
+    return {
+      channel: block.channel,
+      entries,
+      emailSubject: block.channelData.subject,
+      blockStart: block.blockStart,
+    };
   });
 }
 
@@ -249,9 +322,13 @@ function ConversationBlock({ block }: { block: ConversationBlock }) {
 
 // ─── Center panel — timeline ──────────────────────────────────────────────────
 
-function TimelinePanel({ customer, index }: { customer: Customer; index: number }) {
+function TimelinePanel({ customer, index, customerId }: { customer: Customer; index: number; customerId: string }) {
   const [replyChannel, setReplyChannel] = useState<Channel>("whatsapp");
-  const blocks = useMemo(() => buildTimeline(customer), [customer]);
+  const { data: apiBlocks, isLoading: timelineLoading } = useTimeline(customerId);
+  const blocks = useMemo(
+    () => apiBlocks ? apiBlocksToFrontend(apiBlocks) : buildTimeline(customer),
+    [apiBlocks, customer],
+  );
   const assignee = getAssignee(customer.conversations[0]?.assigneeId ?? null);
 
   const activeConv = useMemo(
@@ -315,7 +392,11 @@ function TimelinePanel({ customer, index }: { customer: Customer; index: number 
 
       {/* Timeline */}
       <div className="flex-1 overflow-y-auto px-5 py-4">
-        {blocks.map((block, i) => <ConversationBlock key={i} block={block} />)}
+        {timelineLoading && customerId ? (
+          <div className="py-12 text-center text-[13px] text-neutral-400">Loading timeline…</div>
+        ) : (
+          blocks.map((block, i) => <ConversationBlock key={i} block={block} />)
+        )}
       </div>
 
       {/* Reply bar */}
@@ -505,7 +586,7 @@ export default function VariantA() {
   const [selectedId, setSelectedId] = useState<string>("");
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  // Center and right panels still use seed data until issues #04/#05 are complete
+  // Header/reply-bar and right panel still use seed data until issue #05
   const seedCustomer = CUSTOMERS[selectedIndex % CUSTOMERS.length];
 
   function handleSelect(id: string, index: number) {
@@ -518,7 +599,7 @@ export default function VariantA() {
       <PageHeader />
       <div className="flex flex-1 overflow-hidden">
         <CustomerList selectedId={selectedId} onSelect={handleSelect} />
-        <TimelinePanel customer={seedCustomer} index={selectedIndex} />
+        <TimelinePanel customer={seedCustomer} index={selectedIndex} customerId={selectedId} />
         <CustomerDetailsPanel customer={seedCustomer} />
       </div>
     </div>
