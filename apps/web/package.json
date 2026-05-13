@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.100.10",
     "@textyess/models": "*",
     "lucide-react": "^0.446.0",
     "next": "^16.2.6",

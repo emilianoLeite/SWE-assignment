@@ -4,12 +4,36 @@
 // Styled to match the TextYess product mockups.
 
 import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Search, Filter, Tag, Ban, UserPlus, Copy,
   ExternalLink, Paperclip, Smile, Send, Plus,
 } from "lucide-react";
 import { CUSTOMERS, OPERATORS, type Customer, type Channel } from "./seed-data";
 import { StatusBadge, CustomerAvatar, CHANNEL_CONFIG, timeAgo, formatTime } from "./shared";
+
+// ─── API types ────────────────────────────────────────────────────────────────
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+const BRAND_ID = "aaaaaaaaaaaaaaaaaaaaaaaa";
+
+interface ApiCustomer {
+  _id: string;
+  name: string;
+  lastActivityAt: string;
+  urgencyStatus: "ai_controlled" | "to_manage" | "managed" | "blocked" | "human_controlled";
+}
+
+function useCustomers() {
+  return useQuery<ApiCustomer[]>({
+    queryKey: ["customers", BRAND_ID],
+    queryFn: () =>
+      fetch(`${API_URL}/customers?brandId=${BRAND_ID}`).then((r) => {
+        if (!r.ok) throw new Error("Failed to fetch customers");
+        return r.json();
+      }),
+  });
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -88,7 +112,9 @@ function getAssignee(id: string | null) {
 
 // ─── Left panel ───────────────────────────────────────────────────────────────
 
-function CustomerList({ selectedId, onSelect }: { selectedId: string; onSelect: (id: string) => void }) {
+function CustomerList({ selectedId, onSelect }: { selectedId: string; onSelect: (id: string, index: number) => void }) {
+  const { data: customers, isLoading, isError } = useCustomers();
+
   return (
     <div className="w-[272px] shrink-0 border-r border-neutral-200 flex flex-col bg-white">
       {/* Search + filter row */}
@@ -108,33 +134,30 @@ function CustomerList({ selectedId, onSelect }: { selectedId: string; onSelect: 
 
       {/* Customer rows */}
       <div className="flex-1 overflow-y-auto">
-        {CUSTOMERS.map((customer, i) => {
-          const selected = customer.id === selectedId;
-          const lastMsg = customer.conversations
-            .flatMap((c) => c.messages)
-            .sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime())[0];
-
+        {isLoading && (
+          <div className="px-4 py-8 text-center text-[13px] text-neutral-400">Loading…</div>
+        )}
+        {isError && (
+          <div className="px-4 py-8 text-center text-[13px] text-destructive-500">Failed to load customers</div>
+        )}
+        {customers?.map((customer, i) => {
+          const selected = customer._id === selectedId;
           return (
             <button
-              key={customer.id}
-              onClick={() => onSelect(customer.id)}
+              key={customer._id}
+              onClick={() => onSelect(customer._id, i)}
               className={`w-full text-left px-4 py-3 border-b border-neutral-100 transition-colors flex gap-3 items-start ${
                 selected ? "bg-neutral-50 border-l-2 border-l-primary-500" : "hover:bg-neutral-50/70"
               }`}
             >
               <CustomerAvatar name={customer.name} index={i} size="sm" />
               <div className="flex-1 min-w-0">
-                <div className="flex items-start justify-between gap-1 mb-0.5">
+                <div className="flex items-start justify-between gap-1 mb-1">
                   <span className={`text-[13px] font-medium leading-tight truncate ${selected ? "text-primary-600" : "text-neutral-800"}`}>
                     {customer.name}
                   </span>
                   <span className="text-[11px] text-neutral-400 shrink-0 mt-px">{timeAgo(customer.lastActivityAt)}</span>
                 </div>
-                {lastMsg && (
-                  <p className="text-[12px] text-neutral-500 truncate leading-tight mb-1">
-                    {lastMsg.content}
-                  </p>
-                )}
                 <StatusBadge status={customer.urgencyStatus} size="xs" />
               </div>
             </button>
@@ -479,17 +502,24 @@ function PageHeader() {
 // ─── Variant A root ───────────────────────────────────────────────────────────
 
 export default function VariantA() {
-  const [selectedId, setSelectedId] = useState(CUSTOMERS[0].id);
-  const selected = CUSTOMERS.find((c) => c.id === selectedId) ?? CUSTOMERS[0];
-  const selectedIndex = CUSTOMERS.findIndex((c) => c.id === selectedId);
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
+  // Center and right panels still use seed data until issues #04/#05 are complete
+  const seedCustomer = CUSTOMERS[selectedIndex % CUSTOMERS.length];
+
+  function handleSelect(id: string, index: number) {
+    setSelectedId(id);
+    setSelectedIndex(index);
+  }
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
       <PageHeader />
       <div className="flex flex-1 overflow-hidden">
-        <CustomerList selectedId={selectedId} onSelect={setSelectedId} />
-        <TimelinePanel customer={selected} index={selectedIndex} />
-        <CustomerDetailsPanel customer={selected} />
+        <CustomerList selectedId={selectedId} onSelect={handleSelect} />
+        <TimelinePanel customer={seedCustomer} index={selectedIndex} />
+        <CustomerDetailsPanel customer={seedCustomer} />
       </div>
     </div>
   );

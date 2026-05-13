@@ -54,7 +54,7 @@ export class Conversation {
   @Prop({ default: true })
   aiActive: boolean;
 
-  @Prop({ default: null })
+  @Prop({ type: String, default: null })
   campaign: string | null;
 
   @Prop({ required: true })
