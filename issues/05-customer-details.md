@@ -20,12 +20,12 @@ Wire the existing prototype right panel to this endpoint via React Query. Layout
 
 ## Acceptance criteria
 
-- [ ] `GET /customers/:id` returns all required customer fields
-- [ ] Right panel renders real data from the API
-- [ ] Field labels are ALL-CAPS
-- [ ] "Customer for" is computed from `createdAt` relative to today
-- [ ] Tags render as pills
-- [ ] Last order card shows order ID and date
+- [x] `GET /customers/:id` returns all required customer fields
+- [x] Right panel renders real data from the API
+- [x] Field labels are ALL-CAPS
+- [x] "Customer for" is computed from `createdAt` relative to today
+- [x] Tags render as pills
+- [x] Last order card shows order ID and date
 
 ## Blocked by
 
