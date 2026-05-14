@@ -15,11 +15,11 @@ The prototype in `apps/web/src/components/prototype/` is untouched — it stays 
 
 ## Acceptance criteria
 
-- [ ] `packages/models` exports Mongoose schemas and matching TypeScript types for Customer, Conversation, Message, Operator
-- [ ] `apps/api` starts with `npm run dev` (or `turbo run dev` from root) and connects to MongoDB
-- [ ] `GET /health` returns `200 OK`
-- [ ] `apps/web` can import types from `packages/models` without errors
-- [ ] `turbo run dev` starts both apps concurrently
+- [x] `packages/models` exports Mongoose schemas and matching TypeScript types for Customer, Conversation, Message, Operator
+- [x] `apps/api` starts with `npm run dev` (or `turbo run dev` from root) and connects to MongoDB
+- [x] `GET /health` returns `200 OK`
+- [x] `apps/web` can import types from `packages/models` without errors
+- [x] `turbo run dev` starts both apps concurrently
 
 ## Blocked by
 
