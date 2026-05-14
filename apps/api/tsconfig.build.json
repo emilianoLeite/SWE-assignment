@@ -1,7 +1,10 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "paths": {
+      "@textyess/models": ["../../packages/models/dist/index"]
+    }
   },
   "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
 }

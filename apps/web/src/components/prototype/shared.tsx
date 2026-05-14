@@ -1,6 +1,7 @@
 "use client";
 
-import type { Channel, Status } from "./seed-data";
+export type Channel = "whatsapp" | "email" | "voice" | "onsite";
+export type Status = "ai_controlled" | "to_manage" | "managed" | "blocked" | "human_controlled";
 
 // ─── Time helper ────────────────────────────────────────────────────────────
 

@@ -17,6 +17,6 @@
       "@textyess/models": ["../../packages/models/src/index.ts"]
     }
   },
-  "include": ["src/**/*", "../../packages/models/src/**/*"],
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "test"]
 }

@@ -1,17 +1,16 @@
 "use client";
 
-// Variant A — Three-column: customer list | timeline | customer details panel
-// Styled to match the TextYess product mockups.
+// Three-column layout: customer list | timeline | customer details panel
 
 import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
-  Search, Filter, Ban, UserPlus, Copy,
+  Search, Filter, Ban, Copy,
   ExternalLink, Paperclip, Smile, Send, Plus,
 } from "lucide-react";
-import { CUSTOMERS, OPERATORS, type Customer, type Channel } from "./seed-data";
 import { StatusBadge, CustomerAvatar, CHANNEL_CONFIG, timeAgo, formatTime } from "./shared";
+import type { Channel } from "./shared";
 
 // ─── API types ────────────────────────────────────────────────────────────────
 
@@ -201,62 +200,6 @@ interface ConversationBlock {
   blockStart: string;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function buildTimeline(customer: Customer): ConversationBlock[] {
-  const entries: TimelineEntry[] = [];
-
-  for (const conv of customer.conversations) {
-    if (conv.channel === "voice") {
-      entries.push({
-        channel: "voice",
-        sentBy: "ai",
-        content: "",
-        sentAt: conv.lastActivityAt,
-        isTranscript: true,
-        transcriptLines: conv.channelData.transcript ?? [],
-        voiceMeta: { duration: conv.channelData.duration ?? "0:00", outcome: conv.channelData.outcome ?? "—" },
-      });
-    } else {
-      for (const msg of conv.messages) {
-        entries.push({
-          channel: conv.channel,
-          sentBy: msg.sentBy as "customer" | "ai" | "operator",
-          content: msg.content,
-          sentAt: msg.sentAt,
-          emailSubject: conv.channelData.subject,
-        });
-      }
-    }
-  }
-
-  entries.sort((a, b) => new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime());
-
-  const blocks: ConversationBlock[] = [];
-  for (const entry of entries) {
-    const last = blocks[blocks.length - 1];
-    if (last && last.channel === entry.channel) {
-      last.entries.push(entry);
-    } else {
-      blocks.push({
-        channel: entry.channel,
-        conversationId: "",
-        aiActive: true,
-        entries: [entry],
-        emailSubject: entry.emailSubject,
-        voiceMeta: entry.voiceMeta,
-        blockStart: entry.sentAt,
-      });
-    }
-  }
-
-  return blocks;
-}
-
-function getAssignee(id: string | null) {
-  return OPERATORS.find((o) => o.id === id) ?? null;
-}
-
 // ─── Filter panel ─────────────────────────────────────────────────────────────
 
 const STATUS_OPTIONS = [
@@ -423,7 +366,7 @@ function CustomerList({
   onFiltersChange,
 }: {
   selectedId: string;
-  onSelect: (id: string, index: number) => void;
+  onSelect: (id: string) => void;
   filters: FilterParams;
   onFiltersChange: (f: FilterParams) => void;
 }) {
@@ -482,7 +425,7 @@ function CustomerList({
           return (
             <button
               key={customer._id}
-              onClick={() => onSelect(customer._id, i)}
+              onClick={() => onSelect(customer._id)}
               className={`w-full text-left px-4 py-3 border-b border-neutral-100 transition-colors flex gap-3 items-start ${
                 selected ? "bg-neutral-50 border-l-2 border-l-primary-500" : "hover:bg-neutral-50/70"
               }`}
@@ -556,11 +499,10 @@ function VoiceTranscript({ entry }: { entry: TimelineEntry }) {
   );
 }
 
-function ConversationBlock({ block }: { block: ConversationBlock }) {
+function BlockView({ block }: { block: ConversationBlock }) {
   const cfg = CHANNEL_CONFIG[block.channel];
   return (
     <div className="rounded-xl overflow-hidden border border-neutral-200 mb-4 shadow-sm">
-      {/* Block header */}
       <div className={`flex items-center justify-between px-4 py-2 ${cfg.headerBg} ${cfg.headerText}`}>
         <div className="flex items-center gap-2">
           <span className="text-sm">{cfg.icon}</span>
@@ -574,7 +516,6 @@ function ConversationBlock({ block }: { block: ConversationBlock }) {
         </div>
         <span className="text-[11px] opacity-70">{timeAgo(block.blockStart)}</span>
       </div>
-      {/* Messages */}
       <div className={`px-4 py-3 ${cfg.blockBg}`}>
         {block.channel === "voice"
           ? block.entries[0] && <VoiceTranscript entry={block.entries[0]} />
@@ -604,18 +545,16 @@ function useToggleAi(customerId: string) {
   });
 }
 
-function TimelinePanel({ customer, index, customerId, apiCustomer }: { customer: Customer; index: number; customerId: string; apiCustomer?: ApiCustomerDetail }) {
+function TimelinePanel({ customerId, apiCustomer }: { customerId: string; apiCustomer?: ApiCustomerDetail }) {
   const [replyChannel, setReplyChannel] = useState<Channel>("whatsapp");
   const { data: apiBlocks, isLoading: timelineLoading } = useTimeline(customerId);
   const toggleAi = useToggleAi(customerId);
 
   const blocks = useMemo(
-    () => apiBlocks ? apiBlocksToFrontend(apiBlocks) : buildTimeline(customer),
-    [apiBlocks, customer],
+    () => apiBlocks ? apiBlocksToFrontend(apiBlocks) : [],
+    [apiBlocks],
   );
-  const assignee = getAssignee(customer.conversations[0]?.assigneeId ?? null);
 
-  // Derive per-channel state from real API blocks (last block for each channel)
   const replyChannels = useMemo(() => {
     return (["whatsapp", "email"] as Channel[]).map((ch) => {
       const lastBlock = [...(apiBlocks ?? [])]
@@ -642,10 +581,14 @@ function TimelinePanel({ customer, index, customerId, apiCustomer }: { customer:
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[15px] font-semibold text-neutral-900 truncate">
-                {apiCustomer?.name ?? customer.name}
+                {apiCustomer?.name ?? ""}
               </span>
-              <span className="text-neutral-400 text-sm">·</span>
-              <span className="text-[13px] text-neutral-500">{apiCustomer?.phone ?? customer.phone}</span>
+              {apiCustomer?.phone && (
+                <>
+                  <span className="text-neutral-400 text-sm">·</span>
+                  <span className="text-[13px] text-neutral-500">{apiCustomer.phone}</span>
+                </>
+              )}
             </div>
             <div className="flex items-center gap-2 mt-1.5">
               <button className="flex items-center gap-1 text-[12px] text-neutral-600 border border-neutral-300 rounded-md px-2 py-0.5 hover:bg-neutral-50 transition-colors font-medium">
@@ -659,21 +602,6 @@ function TimelinePanel({ customer, index, customerId, apiCustomer }: { customer:
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {assignee ? (
-            <div className="flex items-center gap-1.5">
-              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${assignee.color}`}>
-                {assignee.initials}
-              </div>
-              <span className="text-[12px] text-neutral-500">{assignee.name}</span>
-            </div>
-          ) : (
-            <button className="flex items-center gap-1.5 text-[12px] text-neutral-500 border border-neutral-200 rounded-lg px-2.5 py-1 hover:bg-neutral-50 transition-colors">
-              <UserPlus className="w-3.5 h-3.5" />
-              Add assignee
-            </button>
-          )}
-        </div>
       </div>
 
       {/* Timeline */}
@@ -681,77 +609,75 @@ function TimelinePanel({ customer, index, customerId, apiCustomer }: { customer:
         {timelineLoading && customerId ? (
           <div className="py-12 text-center text-[13px] text-neutral-400">Loading timeline…</div>
         ) : (
-          blocks.map((block, i) => <ConversationBlock key={i} block={block} />)
+          blocks.map((block, i) => <BlockView key={i} block={block} />)
         )}
       </div>
 
-      {/* Reply bar — not shown for voice/onsite-only customers */}
-      {hasReplyableChannel && <div className="bg-white border-t border-neutral-200 px-4 py-2.5">
-        {/* Channel tabs */}
-        <div className="flex gap-1 mb-2">
-          {replyChannels.map(({ channel, hasConv }) => (
-            <button
-              key={channel}
-              onClick={() => setReplyChannel(channel)}
-              disabled={!hasConv}
-              className={`text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition-colors ${
-                replyChannel === channel
-                  ? "bg-primary-500 text-white border-primary-500"
-                  : "bg-white text-neutral-500 border-neutral-200 hover:border-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed"
-              }`}
-            >
-              {CHANNEL_CONFIG[channel].icon} {CHANNEL_CONFIG[channel].label}
-            </button>
-          ))}
-        </div>
-
-        {/* Input row */}
-        <div className="flex items-center gap-2">
-          {/* Left icons */}
-          <div className="flex items-center gap-1.5 text-neutral-400">
-            <button className="hover:text-neutral-600 transition-colors"><Paperclip className="w-4 h-4" /></button>
-            <button className="hover:text-neutral-600 transition-colors"><Smile className="w-4 h-4" /></button>
-          </div>
-
-          <input
-            disabled={!canReply}
-            placeholder={canReply ? "Insert here the message you want to send" : "To reply, first disable the AI"}
-            className="flex-1 text-[13px] bg-transparent focus:outline-none text-neutral-800 placeholder:text-neutral-400 disabled:cursor-not-allowed"
-          />
-
-          {/* AI toggle */}
-          <div className="flex items-center gap-1.5 shrink-0 pl-2 border-l border-neutral-200">
-            <span className="text-[11px] text-neutral-500 whitespace-nowrap font-medium">
-              AI {activeChannelState?.aiActive ? "active" : "not active"}
-            </span>
-            <button
-              onClick={() => {
-                const state = activeChannelState;
-                if (!state?.conversationId) return;
-                toggleAi.mutate({ conversationId: state.conversationId, aiActive: !state.aiActive });
-              }}
-              disabled={!activeChannelState?.hasConv || toggleAi.isPending}
-              aria-label="Toggle AI"
-              className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none disabled:opacity-50 ${
-                activeChannelState?.aiActive ? "bg-primary-500" : "bg-neutral-300"
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${
-                  activeChannelState?.aiActive ? "left-[18px]" : "left-0.5"
+      {/* Reply bar */}
+      {hasReplyableChannel && (
+        <div className="bg-white border-t border-neutral-200 px-4 py-2.5">
+          <div className="flex gap-1 mb-2">
+            {replyChannels.map(({ channel, hasConv }) => (
+              <button
+                key={channel}
+                onClick={() => setReplyChannel(channel)}
+                disabled={!hasConv}
+                className={`text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition-colors ${
+                  replyChannel === channel
+                    ? "bg-primary-500 text-white border-primary-500"
+                    : "bg-white text-neutral-500 border-neutral-200 hover:border-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed"
                 }`}
-              />
-            </button>
+              >
+                {CHANNEL_CONFIG[channel].icon} {CHANNEL_CONFIG[channel].label}
+              </button>
+            ))}
           </div>
 
-          <button
-            disabled={!canReply}
-            className="w-8 h-8 flex items-center justify-center bg-primary-500 text-white rounded-lg hover:bg-primary-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-          >
-            <Send className="w-3.5 h-3.5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 text-neutral-400">
+              <button className="hover:text-neutral-600 transition-colors"><Paperclip className="w-4 h-4" /></button>
+              <button className="hover:text-neutral-600 transition-colors"><Smile className="w-4 h-4" /></button>
+            </div>
+
+            <input
+              disabled={!canReply}
+              placeholder={canReply ? "Insert here the message you want to send" : "To reply, first disable the AI"}
+              className="flex-1 text-[13px] bg-transparent focus:outline-none text-neutral-800 placeholder:text-neutral-400 disabled:cursor-not-allowed"
+            />
+
+            <div className="flex items-center gap-1.5 shrink-0 pl-2 border-l border-neutral-200">
+              <span className="text-[11px] text-neutral-500 whitespace-nowrap font-medium">
+                AI {activeChannelState?.aiActive ? "active" : "not active"}
+              </span>
+              <button
+                onClick={() => {
+                  const state = activeChannelState;
+                  if (!state?.conversationId) return;
+                  toggleAi.mutate({ conversationId: state.conversationId, aiActive: !state.aiActive });
+                }}
+                disabled={!activeChannelState?.hasConv || toggleAi.isPending}
+                aria-label="Toggle AI"
+                className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none disabled:opacity-50 ${
+                  activeChannelState?.aiActive ? "bg-primary-500" : "bg-neutral-300"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${
+                    activeChannelState?.aiActive ? "left-[18px]" : "left-0.5"
+                  }`}
+                />
+              </button>
+            </div>
+
+            <button
+              disabled={!canReply}
+              className="w-8 h-8 flex items-center justify-center bg-primary-500 text-white rounded-lg hover:bg-primary-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+            >
+              <Send className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
-      </div>}
+      )}
     </div>
   );
 }
@@ -797,7 +723,6 @@ function CustomerDetailsPanel({ customer, isLoading }: { customer: ApiCustomerDe
 
   return (
     <div className="w-60 shrink-0 border-l border-neutral-200 bg-white flex flex-col overflow-y-auto">
-      {/* Go to contacts */}
       <div className="px-4 py-2 border-b border-neutral-100 flex justify-end">
         <button className="flex items-center gap-1 text-[11px] text-neutral-400 hover:text-primary-500 transition-colors">
           Go to contacts page
@@ -805,7 +730,6 @@ function CustomerDetailsPanel({ customer, isLoading }: { customer: ApiCustomerDe
         </button>
       </div>
 
-      {/* Contact fields */}
       <div className="px-4 divide-y divide-neutral-100">
         <Field label="Email" value={customer.email ?? "—"} copyable />
         <Field label="Phone number" value={customer.phone ?? "—"} copyable />
@@ -816,7 +740,6 @@ function CustomerDetailsPanel({ customer, isLoading }: { customer: ApiCustomerDe
         />
       </div>
 
-      {/* Tags */}
       <div className="px-4 py-3 border-t border-neutral-100">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400 mb-2">Tags</p>
         <div className="flex flex-wrap gap-1.5">
@@ -834,7 +757,6 @@ function CustomerDetailsPanel({ customer, isLoading }: { customer: ApiCustomerDe
         </button>
       </div>
 
-      {/* Notes */}
       <div className="px-4 py-3 border-t border-neutral-100">
         <div className="flex items-center justify-between mb-1.5">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400">Notes</p>
@@ -845,7 +767,6 @@ function CustomerDetailsPanel({ customer, isLoading }: { customer: ApiCustomerDe
         </p>
       </div>
 
-      {/* Last order */}
       {customer.lastOrder && (
         <div className="px-4 py-3 border-t border-neutral-100">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400 mb-1.5">Last order placed</p>
@@ -885,7 +806,7 @@ function PageHeader() {
   );
 }
 
-// ─── Variant A root ───────────────────────────────────────────────────────────
+// ─── Root ─────────────────────────────────────────────────────────────────────
 
 function filtersFromSearchParams(sp: ReturnType<typeof useSearchParams>): FilterParams {
   const filters: FilterParams = {};
@@ -906,7 +827,6 @@ function filtersFromSearchParams(sp: ReturnType<typeof useSearchParams>): Filter
 
 export default function VariantA() {
   const [selectedId, setSelectedId] = useState<string>("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -914,8 +834,6 @@ export default function VariantA() {
 
   const handleFiltersChange = useCallback((next: FilterParams) => {
     const sp = new URLSearchParams();
-    const variant = searchParams.get("variant");
-    if (variant) sp.set("variant", variant);
     if (next.status) sp.set("status", next.status);
     if (next.assigneeId) sp.set("assigneeId", next.assigneeId);
     if (next.tags?.length) next.tags.forEach((t) => sp.append("tags", t));
@@ -923,16 +841,9 @@ export default function VariantA() {
     if (next.from) sp.set("from", next.from);
     if (next.to) sp.set("to", next.to);
     router.replace(`?${sp.toString()}`);
-  }, [searchParams, router]);
+  }, [router]);
 
   const { data: apiCustomer, isLoading: detailLoading } = useCustomerDetail(selectedId);
-
-  const seedCustomer = CUSTOMERS[selectedIndex % CUSTOMERS.length];
-
-  function handleSelect(id: string, index: number) {
-    setSelectedId(id);
-    setSelectedIndex(index);
-  }
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
@@ -940,11 +851,11 @@ export default function VariantA() {
       <div className="flex flex-1 overflow-hidden">
         <CustomerList
           selectedId={selectedId}
-          onSelect={handleSelect}
+          onSelect={setSelectedId}
           filters={filters}
           onFiltersChange={handleFiltersChange}
         />
-        <TimelinePanel customer={seedCustomer} index={selectedIndex} customerId={selectedId} apiCustomer={apiCustomer} />
+        <TimelinePanel customerId={selectedId} apiCustomer={apiCustomer} />
         <CustomerDetailsPanel customer={apiCustomer} isLoading={!!selectedId && detailLoading} />
       </div>
     </div>
