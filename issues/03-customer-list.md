@@ -20,12 +20,12 @@ Wire the existing prototype customer list to this endpoint via React Query. Repl
 
 ## Acceptance criteria
 
-- [ ] `GET /customers` returns customers sorted by `lastActivityAt` desc
-- [ ] `urgencyStatus` reflects the most urgent status across all conversations for that customer
-- [ ] Each filter param (`status`, `assigneeId`, `tags`, `campaign`, `from`/`to`) narrows results at the Customer level
-- [ ] Frontend left panel renders real data from the API
-- [ ] Status badge colors match design tokens (`warning` for `to_manage`, `success` for `managed`, `destructive` for `blocked`, `primary` for `ai_controlled`)
-- [ ] Selecting a customer highlights the row with a left `primary-500` border
+- [x] `GET /customers` returns customers sorted by `lastActivityAt` desc
+- [x] `urgencyStatus` reflects the most urgent status across all conversations for that customer
+- [x] Each filter param (`status`, `assigneeId`, `tags`, `campaign`, `from`/`to`) narrows results at the Customer level
+- [x] Frontend left panel renders real data from the API
+- [x] Status badge colors match design tokens (`warning` for `to_manage`, `success` for `managed`, `destructive` for `blocked`, `primary` for `ai_controlled`)
+- [x] Selecting a customer highlights the row with a left `primary-500` border
 
 ## Blocked by
 

@@ -158,6 +158,98 @@ describe('GET /customers (e2e)', () => {
     expect(body[0].name).toBe('Ours');
   });
 
+  // ── assigneeId filter ────────────────────────────────────────────────────
+
+  it('filters by specific assigneeId', async () => {
+    const op = new Types.ObjectId();
+    const assigned = await CustomerModel.create({
+      brandId: BRAND, name: 'Assigned', lastActivityAt: new Date('2024-02-20'),
+    });
+    const unassigned = await CustomerModel.create({
+      brandId: BRAND, name: 'Unassigned', lastActivityAt: new Date('2024-02-15'),
+    });
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: assigned._id, channel: 'whatsapp', status: 'managed', type: 'inbound', assigneeId: op, lastActivityAt: new Date('2024-02-20') },
+      { brandId: BRAND, customerId: unassigned._id, channel: 'email', status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-02-15') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers')
+      .query({ brandId: BRAND.toString(), assigneeId: op.toString() })
+      .expect(200);
+
+    expect(body).toHaveLength(1);
+    expect(body[0].name).toBe('Assigned');
+  });
+
+  it('filters for unassigned conversations when assigneeId=unassigned', async () => {
+    const op = new Types.ObjectId();
+    const assigned = await CustomerModel.create({
+      brandId: BRAND, name: 'Assigned', lastActivityAt: new Date('2024-02-20'),
+    });
+    const unassigned = await CustomerModel.create({
+      brandId: BRAND, name: 'Unassigned', lastActivityAt: new Date('2024-02-15'),
+    });
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: assigned._id, channel: 'whatsapp', status: 'managed', type: 'inbound', assigneeId: op, lastActivityAt: new Date('2024-02-20') },
+      { brandId: BRAND, customerId: unassigned._id, channel: 'email', status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-02-15') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers')
+      .query({ brandId: BRAND.toString(), assigneeId: 'unassigned' })
+      .expect(200);
+
+    expect(body).toHaveLength(1);
+    expect(body[0].name).toBe('Unassigned');
+  });
+
+  // ── campaign filter ───────────────────────────────────────────────────────
+
+  it('filters by campaign', async () => {
+    const c1 = await CustomerModel.create({
+      brandId: BRAND, name: 'SummerCustomer', lastActivityAt: new Date('2024-03-10'),
+    });
+    const c2 = await CustomerModel.create({
+      brandId: BRAND, name: 'OtherCustomer', lastActivityAt: new Date('2024-03-05'),
+    });
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: c1._id, channel: 'whatsapp', status: 'managed', type: 'inbound', campaign: 'summer-sale', lastActivityAt: new Date('2024-03-10') },
+      { brandId: BRAND, customerId: c2._id, channel: 'email', status: 'managed', type: 'inbound', campaign: 'newsletter', lastActivityAt: new Date('2024-03-05') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers')
+      .query({ brandId: BRAND.toString(), campaign: 'summer-sale' })
+      .expect(200);
+
+    expect(body).toHaveLength(1);
+    expect(body[0].name).toBe('SummerCustomer');
+  });
+
+  // ── date-range filter (from / to) ─────────────────────────────────────────
+
+  it('filters by lastActivityAt date range', async () => {
+    const recent = await CustomerModel.create({
+      brandId: BRAND, name: 'Recent', lastActivityAt: new Date('2024-06-15'),
+    });
+    const old = await CustomerModel.create({
+      brandId: BRAND, name: 'Old', lastActivityAt: new Date('2024-01-05'),
+    });
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: recent._id, channel: 'whatsapp', status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-06-15') },
+      { brandId: BRAND, customerId: old._id, channel: 'email', status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-01-05') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers')
+      .query({ brandId: BRAND.toString(), from: '2024-06-01', to: '2024-07-01' })
+      .expect(200);
+
+    expect(body).toHaveLength(1);
+    expect(body[0].name).toBe('Recent');
+  });
+
   // ── missing brandId → 400 ────────────────────────────────────────────────
 
   it('returns 400 when brandId is missing', async () => {

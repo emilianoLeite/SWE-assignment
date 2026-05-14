@@ -104,7 +104,9 @@ export class CustomersService {
     // Conversation-level filter to identify qualifying customers
     const convMatch: Record<string, unknown> = { brandId: brandOid };
     if (params.status) convMatch.status = params.status;
-    if (params.assigneeId && Types.ObjectId.isValid(params.assigneeId)) {
+    if (params.assigneeId === 'unassigned') {
+      convMatch.assigneeId = null;
+    } else if (params.assigneeId && Types.ObjectId.isValid(params.assigneeId)) {
       convMatch.assigneeId = new Types.ObjectId(params.assigneeId);
     }
     if (params.campaign) convMatch.campaign = params.campaign;
