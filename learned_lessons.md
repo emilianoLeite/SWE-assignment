@@ -27,3 +27,7 @@
 - **Derive filter tag options from the customer list response rather than a separate endpoint** — `GET /customers` already aggregates per-customer data; adding `tags: '$customer.tags'` to the `$project` stage lets the frontend extract distinct tags from the already-loaded list. No new endpoint, no extra round trip.
 
 - **Filter state in URL search params via `router.replace`** — use `useSearchParams` (read) + `router.replace` (write) from `next/navigation` to keep filter state in the URL. Always preserve unrelated params (e.g. `?variant=A`) when building the new search string. `router.replace` avoids polluting browser history on each filter change.
+
+- **NestJS `tsconfig.build.json` + monorepo path aliases: point to `dist/`, not `src/`** — if `tsconfig.json` maps `@textyess/models` via `paths` to the package's source `.ts` files, `nest build` (which uses `tsconfig.build.json` with `rootDir: "./src"`) will fail with TS6059 because those source files are outside `rootDir`. Fix: override `paths` in `tsconfig.build.json` to point to the pre-built `dist/index` declarations instead. Turbo's pipeline already ensures the models package builds before the API.
+
+- **Shared prototype types should live in `shared.tsx`, not `seed-data.ts`** — when cleaning up prototype scaffolding, move the canonical type definitions (`Channel`, `Status`) into the shared utility file so they remain available after `seed-data.ts` is deleted. This avoids chained import breakage across `shared.tsx` and any components that imported the types transitively.

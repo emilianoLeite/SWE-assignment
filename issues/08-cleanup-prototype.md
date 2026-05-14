@@ -21,12 +21,12 @@ Remove throwaway prototype code now that the real implementation is complete, an
 
 ## Acceptance criteria
 
-- [ ] VariantB.tsx, VariantC.tsx, PrototypeSwitcher.tsx are deleted
-- [ ] seed-data.ts is deleted (or confirmed still needed and kept)
-- [ ] `/prototype/unified-inbox` route no longer exists
-- [ ] Real inbox is accessible at `/inbox/unified`
-- [ ] Root `/` redirects to `/inbox/unified`
-- [ ] `turbo run build` passes cleanly
+- [x] VariantB.tsx, VariantC.tsx, PrototypeSwitcher.tsx are deleted
+- [x] seed-data.ts is deleted (or confirmed still needed and kept)
+- [x] `/prototype/unified-inbox` route no longer exists
+- [x] Real inbox is accessible at `/inbox/unified`
+- [x] Root `/` redirects to `/inbox/unified`
+- [x] `turbo run build` passes cleanly
 
 ## Blocked by
 
