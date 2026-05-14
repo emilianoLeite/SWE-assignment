@@ -28,12 +28,12 @@ Messages within a block: distinguish `sentBy` (customer / ai / operator) with al
 
 ## Acceptance criteria
 
-- [ ] `GET /customers/:id/timeline` returns blocks in chronological order
-- [ ] Consecutive same-channel messages are merged into one block
-- [ ] Voice block includes transcript from `channelData.transcript`; no `messages` entry needed
-- [ ] Frontend renders blocks with correct channel color coding
-- [ ] Block headers appear for email and voice; absent for WhatsApp and on-site
-- [ ] `sentBy` is visually distinguishable within each message
+- [x] `GET /customers/:id/timeline` returns blocks in chronological order
+- [x] Consecutive same-channel messages are merged into one block
+- [x] Voice block includes transcript from `channelData.transcript`; no `messages` entry needed
+- [x] Frontend renders blocks with correct channel color coding
+- [x] Block headers appear for email and voice; absent for WhatsApp and on-site
+- [x] `sentBy` is visually distinguishable within each message
 
 ## Blocked by
 
