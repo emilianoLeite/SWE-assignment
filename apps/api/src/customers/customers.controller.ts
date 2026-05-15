@@ -30,6 +30,15 @@ export class CustomersController {
     });
   }
 
+  // Declared before the `:id` routes so it isn't shadowed by the parameter
+  // match — otherwise "tags" would be treated as an :id and rejected as an
+  // invalid ObjectId.
+  @Get('tags')
+  getTags(@Query('brandId') brandId?: string) {
+    if (!brandId) throw new BadRequestException('brandId is required');
+    return this.customersService.findTags(brandId);
+  }
+
   @Get(':id/timeline')
   getTimeline(@Param('id') id: string) {
     return this.customersService.getTimeline(id);

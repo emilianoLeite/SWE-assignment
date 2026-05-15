@@ -30,13 +30,13 @@ Required indexes created by the seed script:
 
 ## Acceptance criteria
 
-- [ ] `npm run seed` runs without errors against a local MongoDB instance
-- [ ] All 4 channels represented in at least one conversation
-- [ ] All conversation statuses represented (`ai_controlled`, `to_manage`, `managed`, `blocked`)
-- [ ] Both conversation types represented (`inbound`, `outbound`)
-- [ ] At least one customer has conversations in 3+ channels (to exercise the timeline grouping)
-- [ ] `customer.lastActivityAt` is populated and reflects the most recent message
-- [ ] Required indexes exist after seeding
+- [x] `npm run seed` runs without errors against a local MongoDB instance
+- [x] All 4 channels represented in at least one conversation
+- [x] All conversation statuses represented (`ai_controlled`, `to_manage`, `managed`, `blocked`)
+- [x] Both conversation types represented (`inbound`, `outbound`)
+- [x] At least one customer has conversations in 3+ channels (to exercise the timeline grouping)
+- [x] `customer.lastActivityAt` is populated and reflects the most recent message
+- [x] Required indexes exist after seeding
 
 ## Blocked by
 

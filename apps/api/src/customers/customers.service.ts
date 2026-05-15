@@ -5,8 +5,16 @@ import {
   Conversation, ConversationDocument,
   Customer, CustomerDocument,
   Message, MessageDocument,
+  Operator, OperatorDocument,
 } from '@textyess/models';
-import type { Channel, SentBy, MessageType } from '@textyess/models';
+import type {
+  Channel,
+  CustomerDetail,
+  CustomerFilters,
+  CustomerListItem,
+  TimelineBlock,
+  TimelineMessage,
+} from '@textyess/models';
 
 const URGENCY_RANK: PipelineStage.AddFields['$addFields'] = {
   $switch: {
@@ -34,57 +42,7 @@ const RANK_TO_STATUS: PipelineStage.AddFields['$addFields'] = {
   },
 };
 
-export interface CustomerListItem {
-  _id: string;
-  name: string;
-  lastActivityAt: Date;
-  urgencyStatus: string;
-  tags: string[];
-}
-
-export interface FindCustomersParams {
-  brandId: string;
-  status?: string;
-  assigneeId?: string;
-  tags?: string[];
-  campaign?: string;
-  from?: string;
-  to?: string;
-}
-
-export interface TimelineMessage {
-  _id: string;
-  sentBy: SentBy;
-  content: string;
-  type: MessageType;
-  sentAt: Date;
-}
-
-export interface TimelineBlock {
-  channel: Channel;
-  conversationId: string;
-  aiActive: boolean;
-  blockStart: Date;
-  channelData: {
-    subject?: string;
-    duration?: string;
-    outcome?: string;
-    transcript?: Array<{ speaker: 'ai' | 'customer'; text: string }>;
-  };
-  messages: TimelineMessage[];
-}
-
-export interface CustomerDetail {
-  _id: string;
-  name: string;
-  email: string;
-  phone: string;
-  lifetimeSpend: number;
-  tags: string[];
-  notes: string;
-  lastOrder: { id: string; placedAt: Date } | null;
-  createdAt: Date;
-}
+export type FindCustomersParams = CustomerFilters & { brandId: string };
 
 @Injectable()
 export class CustomersService {
@@ -92,6 +50,7 @@ export class CustomersService {
     @InjectModel(Customer.name) private readonly customerModel: Model<CustomerDocument>,
     @InjectModel(Conversation.name) private readonly convModel: Model<ConversationDocument>,
     @InjectModel(Message.name) private readonly messageModel: Model<MessageDocument>,
+    @InjectModel(Operator.name) private readonly operatorModel: Model<OperatorDocument>,
   ) {}
 
   async findCustomers(params: FindCustomersParams): Promise<CustomerListItem[]> {
@@ -101,31 +60,69 @@ export class CustomersService {
 
     const brandOid = new Types.ObjectId(params.brandId);
 
-    // Conversation-level filter to identify qualifying customers
+    // Conversation-level filter to identify qualifying customers.
+    // Note: assigneeId is intentionally NOT applied here — it must run after
+    // we resolve each customer's single assignee (see below), so the list
+    // stays consistent with the "Assigned to" header even if the underlying
+    // data violates the one-operator-per-customer rule.
+    // The date range is also NOT applied here: see the customer-level
+    // dateRangeFilter below.
     const convMatch: Record<string, unknown> = { brandId: brandOid };
     if (params.status) convMatch.status = params.status;
-    if (params.assigneeId === 'unassigned') {
-      convMatch.assigneeId = null;
-    } else if (params.assigneeId && Types.ObjectId.isValid(params.assigneeId)) {
-      convMatch.assigneeId = new Types.ObjectId(params.assigneeId);
-    }
     if (params.campaign) convMatch.campaign = params.campaign;
-    if (params.from || params.to) {
-      const dateRange: Record<string, Date> = {};
-      if (params.from) dateRange.$gte = new Date(params.from);
-      if (params.to) dateRange.$lte = new Date(params.to);
-      convMatch.lastActivityAt = dateRange;
-    }
+
+    // The "Last Activity" filter is meant to match the value shown in the
+    // list (customer.lastActivityAt, the latest activity across ALL of the
+    // customer's conversations). Filtering on conversation.lastActivityAt
+    // would qualify a customer whenever ANY of their conversations falls
+    // in the window — even if their displayed lastActivityAt is outside it,
+    // making the result visibly inconsistent with the filter (e.g. a
+    // customer whose latest message is 07/05 surfacing for a 01–06/05
+    // range because an older conversation happens to fall in the window).
+    const dateRangeFilter: PipelineStage[] = (() => {
+      if (!params.from && !params.to) return [];
+      const range: Record<string, Date> = {};
+      if (params.from) range.$gte = new Date(params.from);
+      if (params.to) range.$lte = new Date(params.to);
+      return [{ $match: { 'customer.lastActivityAt': range } }];
+    })();
 
     const tagsFilter = params.tags?.length
       ? [{ $match: { 'customer.tags': { $in: params.tags } } } as PipelineStage]
       : [];
 
+    // The displayed urgencyStatus is the MIN rank across ALL of a customer's
+    // conversations, so filtering by status on the conversation-level $match
+    // alone is not enough: a customer with both an ai_controlled and a more
+    // urgent human_controlled conversation would pass an ai_controlled filter
+    // while their badge shows human_controlled. Filter again on the computed
+    // urgencyStatus to keep filter and badge consistent.
+    const urgencyStatusFilter = params.status
+      ? [{ $match: { urgencyStatus: params.status } } as PipelineStage]
+      : [];
+
+    // Same shape of bug as status: per the one-operator-per-customer rule,
+    // each customer has a single resolved assignee. Filter on that resolved
+    // value (not on "any conversation matches") so the operator dropdown and
+    // the "Assigned to" header always agree, even when seed/legacy data has
+    // mixed assigneeIds across a customer's conversations.
+    const assigneeFilter: PipelineStage[] = (() => {
+      if (params.assigneeId === 'unassigned') {
+        return [{ $match: { resolvedAssigneeId: null } }];
+      }
+      if (params.assigneeId && Types.ObjectId.isValid(params.assigneeId)) {
+        return [{ $match: { resolvedAssigneeId: new Types.ObjectId(params.assigneeId) } }];
+      }
+      return [];
+    })();
+
     const pipeline: PipelineStage[] = [
       { $match: convMatch },
       { $group: { _id: '$customerId' } },
 
-      // Re-fetch ALL conversations for each qualifying customer to compute urgency
+      // Re-fetch ALL conversations for each qualifying customer to compute
+      // urgency and resolve the assignee. Sorted newest-first so the first
+      // non-null assigneeId is the most recent.
       {
         $lookup: {
           from: 'conversations',
@@ -141,6 +138,7 @@ export class CustomersService {
                 },
               },
             },
+            { $sort: { lastActivityAt: -1 } },
           ],
           as: 'allConvs',
         },
@@ -151,13 +149,37 @@ export class CustomersService {
           minUrgencyRank: {
             $min: { $map: { input: '$allConvs', as: 'c', in: URGENCY_RANK } },
           },
+          resolvedAssigneeId: {
+            $let: {
+              vars: {
+                assigned: {
+                  $filter: {
+                    input: '$allConvs',
+                    as: 'c',
+                    cond: { $ne: ['$$c.assigneeId', null] },
+                  },
+                },
+              },
+              in: {
+                $cond: [
+                  { $gt: [{ $size: '$$assigned' }, 0] },
+                  { $arrayElemAt: ['$$assigned.assigneeId', 0] },
+                  null,
+                ],
+              },
+            },
+          },
         },
       },
       { $addFields: { urgencyStatus: RANK_TO_STATUS } },
 
+      ...urgencyStatusFilter,
+      ...assigneeFilter,
+
       { $lookup: { from: 'customers', localField: '_id', foreignField: '_id', as: 'customer' } },
       { $unwind: '$customer' },
 
+      ...dateRangeFilter,
       ...tagsFilter,
 
       { $sort: { 'customer.lastActivityAt': -1 } },
@@ -173,7 +195,19 @@ export class CustomersService {
       },
     ];
 
-    return this.convModel.aggregate<CustomerListItem>(pipeline);
+    const rows = await this.convModel
+      .aggregate<Omit<CustomerListItem, 'lastActivityAt'> & { lastActivityAt: Date }>(pipeline);
+    return rows.map((r) => ({ ...r, lastActivityAt: r.lastActivityAt.toISOString() }));
+  }
+
+  async findTags(brandId: string): Promise<string[]> {
+    if (!Types.ObjectId.isValid(brandId)) {
+      throw new BadRequestException('Invalid brandId');
+    }
+    const tags = await this.customerModel.distinct('tags', {
+      brandId: new Types.ObjectId(brandId),
+    });
+    return (tags as string[]).sort();
   }
 
   async getCustomer(customerId: string): Promise<CustomerDetail> {
@@ -182,6 +216,27 @@ export class CustomersService {
     }
     const doc = await this.customerModel.findById(customerId).lean();
     if (!doc) throw new NotFoundException('Customer not found');
+
+    // Business rule: all of a Customer's Conversations share the same
+    // assigneeId. We pick the assigneeId of the most-recent assigned
+    // Conversation — same rule the list filter uses — so the detail header
+    // and the operator filter dropdown always agree, even when legacy data
+    // breaks the rule. If no Conversation has an assignee, the Customer is
+    // unassigned.
+    const assignedConv = await this.convModel
+      .findOne({ customerId: doc._id, assigneeId: { $ne: null } }, { assigneeId: 1 })
+      .sort({ lastActivityAt: -1 })
+      .lean();
+    let assignee: CustomerDetail['assignee'] = null;
+    if (assignedConv?.assigneeId) {
+      const op = await this.operatorModel
+        .findById(assignedConv.assigneeId, { _id: 1, name: 1 })
+        .lean();
+      if (op) {
+        assignee = { _id: (op._id as Types.ObjectId).toString(), name: op.name };
+      }
+    }
+
     return {
       _id: (doc._id as Types.ObjectId).toString(),
       name: doc.name,
@@ -190,8 +245,11 @@ export class CustomersService {
       lifetimeSpend: doc.lifetimeSpend,
       tags: doc.tags,
       notes: doc.notes,
-      lastOrder: doc.lastOrder ?? null,
-      createdAt: (doc as unknown as { createdAt: Date }).createdAt,
+      lastOrder: doc.lastOrder
+        ? { id: doc.lastOrder.id, placedAt: doc.lastOrder.placedAt.toISOString() }
+        : null,
+      createdAt: (doc as unknown as { createdAt: Date }).createdAt.toISOString(),
+      assignee,
     };
   }
 
@@ -252,7 +310,8 @@ export class CustomersService {
           sentBy: msg.sentBy,
           content: msg.content,
           type: msg.type,
-          sentAt: msg.sentAt,
+          sentAt: msg.sentAt.toISOString(),
+          attachments: msg.attachments,
         },
         isVoice: false,
       });
@@ -277,12 +336,12 @@ export class CustomersService {
           channel: entry.channel,
           conversationId: entry.convId,
           aiActive: entry.aiActive,
-          blockStart: entry.sortKey,
+          blockStart: entry.sortKey.toISOString(),
           channelData: {
             subject: conv.channelData?.subject,
             duration: conv.channelData?.duration,
             outcome: conv.channelData?.outcome,
-            transcript: conv.channelData?.transcript as Array<{ speaker: 'ai' | 'customer'; text: string }> | undefined,
+            transcript: conv.channelData?.transcript,
           },
           messages: entry.isVoice ? [] : (entry.message ? [entry.message] : []),
         });

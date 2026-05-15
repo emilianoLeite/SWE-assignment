@@ -65,6 +65,12 @@ export interface IConversation {
   createdAt: Date;
 }
 
+export interface Attachment {
+  filename: string;
+  size: number; // bytes
+  mimeType: string;
+}
+
 export interface IMessage {
   _id: string;
   conversationId: string;
@@ -72,4 +78,58 @@ export interface IMessage {
   content: string;
   type: MessageType;
   sentAt: Date;
+  attachments?: Attachment[];
+}
+
+// ─── Wire types ───────────────────────────────────────────────────────────────
+// What the API serves over JSON. Dates are ISO strings because that's what
+// crosses the wire after Nest serializes. Use these in both the API response
+// contracts and the web consumers so the two can't drift apart.
+
+export interface CustomerListItem {
+  _id: string;
+  name: string;
+  lastActivityAt: string;
+  urgencyStatus: ConversationStatus;
+  tags: string[];
+}
+
+export interface CustomerDetail {
+  _id: string;
+  name: string;
+  email: string;
+  phone: string;
+  lifetimeSpend: number;
+  tags: string[];
+  notes: string;
+  lastOrder: { id: string; placedAt: string } | null;
+  createdAt: string;
+  assignee: { _id: string; name: string } | null;
+}
+
+export interface TimelineMessage {
+  _id: string;
+  sentBy: SentBy;
+  content: string;
+  type: MessageType;
+  sentAt: string;
+  attachments?: Attachment[];
+}
+
+export interface TimelineBlock {
+  channel: Channel;
+  conversationId: string;
+  aiActive: boolean;
+  blockStart: string;
+  channelData: ChannelData;
+  messages: TimelineMessage[];
+}
+
+export interface CustomerFilters {
+  status?: string;
+  assigneeId?: string;
+  tags?: string[];
+  campaign?: string;
+  from?: string;
+  to?: string;
 }

@@ -5,7 +5,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import request from 'supertest';
 import { Types, Model } from 'mongoose';
 import { CustomersModule } from '../src/customers/customers.module';
-import { Customer, Conversation, Message } from '@textyess/models';
+import { Customer, Conversation, Message, Operator } from '@textyess/models';
 
 const BRAND = new Types.ObjectId('aaaaaaaaaaaaaaaaaaaaaaaa');
 const OTHER_BRAND = new Types.ObjectId('bbbbbbbbbbbbbbbbbbbbbbbb');
@@ -112,6 +112,50 @@ describe('GET /customers (e2e)', () => {
     expect(body[0].name).toBe('ToManage');
   });
 
+  // ── status filter must match the displayed urgencyStatus ────────────────
+  // Regression: filtering by ai_controlled was returning customers whose
+  // displayed badge was human_controlled (a more urgent status), because the
+  // pipeline matched on "at least one conversation in this status" while the
+  // returned urgencyStatus reflects the MIN across all conversations.
+
+  it('excludes customers whose displayed urgencyStatus does not match the status filter', async () => {
+    const davide = await CustomerModel.create({
+      brandId: BRAND, name: 'Davide', lastActivityAt: new Date('2024-05-10'),
+    });
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: davide._id, channel: 'voice', status: 'human_controlled', type: 'inbound', lastActivityAt: new Date('2024-05-09') },
+      { brandId: BRAND, customerId: davide._id, channel: 'email', status: 'ai_controlled', type: 'inbound', lastActivityAt: new Date('2024-05-10') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers')
+      .query({ brandId: BRAND.toString(), status: 'ai_controlled' })
+      .expect(200);
+
+    // Davide's overall urgencyStatus is human_controlled (more urgent than
+    // ai_controlled), so he must not appear in the ai_controlled bucket.
+    expect(body).toHaveLength(0);
+  });
+
+  it('includes a customer in the ai_controlled bucket only when all conversations are at most ai_controlled', async () => {
+    const aiOnly = await CustomerModel.create({
+      brandId: BRAND, name: 'AiOnly', lastActivityAt: new Date('2024-05-10'),
+    });
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: aiOnly._id, channel: 'email', status: 'ai_controlled', type: 'inbound', lastActivityAt: new Date('2024-05-10') },
+      { brandId: BRAND, customerId: aiOnly._id, channel: 'whatsapp', status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-05-09') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers')
+      .query({ brandId: BRAND.toString(), status: 'ai_controlled' })
+      .expect(200);
+
+    expect(body).toHaveLength(1);
+    expect(body[0].name).toBe('AiOnly');
+    expect(body[0].urgencyStatus).toBe('ai_controlled');
+  });
+
   // ── tags filter ──────────────────────────────────────────────────────────
 
   it('filters by tags', async () => {
@@ -182,6 +226,54 @@ describe('GET /customers (e2e)', () => {
     expect(body[0].name).toBe('Assigned');
   });
 
+  // ── assigneeId filter must match the resolved (displayed) assignee ───────
+  // Regression: filtering by an operator returned customers who had any
+  // conversation referencing that operator — even when the customer's
+  // resolved assignee (the one shown in the UI) was a different operator.
+  // After the "one operator per customer" rule, the filter must match the
+  // resolved assignee, not any-conversation.
+
+  it('excludes customers whose resolved assignee does not match the assigneeId filter', async () => {
+    const marco = new Types.ObjectId();
+    const giulia = new Types.ObjectId();
+    const anna = await CustomerModel.create({
+      brandId: BRAND, name: 'Anna', lastActivityAt: new Date('2024-02-20'),
+    });
+    // Anna's resolved assignee is Marco (most-recent non-null assigneeId).
+    // A legacy/rule-violating older Giulia conversation must not surface her
+    // under Giulia's filter.
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: anna._id, channel: 'whatsapp', status: 'managed', type: 'inbound', assigneeId: marco, lastActivityAt: new Date('2024-02-20') },
+      { brandId: BRAND, customerId: anna._id, channel: 'email', status: 'managed', type: 'inbound', assigneeId: giulia, lastActivityAt: new Date('2024-02-10') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers')
+      .query({ brandId: BRAND.toString(), assigneeId: giulia.toString() })
+      .expect(200);
+
+    expect(body).toHaveLength(0);
+  });
+
+  it('returns the customer when filtering by their resolved assignee', async () => {
+    const marco = new Types.ObjectId();
+    const anna = await CustomerModel.create({
+      brandId: BRAND, name: 'Anna', lastActivityAt: new Date('2024-02-20'),
+    });
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: anna._id, channel: 'whatsapp', status: 'managed', type: 'inbound', assigneeId: marco, lastActivityAt: new Date('2024-02-20') },
+      { brandId: BRAND, customerId: anna._id, channel: 'voice', status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-02-15') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers')
+      .query({ brandId: BRAND.toString(), assigneeId: marco.toString() })
+      .expect(200);
+
+    expect(body).toHaveLength(1);
+    expect(body[0].name).toBe('Anna');
+  });
+
   it('filters for unassigned conversations when assigneeId=unassigned', async () => {
     const op = new Types.ObjectId();
     const assigned = await CustomerModel.create({
@@ -248,6 +340,29 @@ describe('GET /customers (e2e)', () => {
 
     expect(body).toHaveLength(1);
     expect(body[0].name).toBe('Recent');
+  });
+
+  // ── date filter must match the displayed lastActivityAt ─────────────────
+  // Regression: a customer with an older conversation inside the window was
+  // returned even when their customer.lastActivityAt (the value shown in the
+  // list) was outside it. The date filter must match the displayed last
+  // activity, not "any conversation in this window".
+
+  it('excludes a customer whose displayed lastActivityAt is outside the window, even if an older conversation falls inside it', async () => {
+    const roberto = await CustomerModel.create({
+      brandId: BRAND, name: 'Roberto', lastActivityAt: new Date('2026-05-07'),
+    });
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: roberto._id, channel: 'whatsapp', status: 'blocked', type: 'inbound', lastActivityAt: new Date('2026-05-05') },
+      { brandId: BRAND, customerId: roberto._id, channel: 'onsite', status: 'ai_controlled', type: 'outbound', lastActivityAt: new Date('2026-05-07') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers')
+      .query({ brandId: BRAND.toString(), from: '2026-05-01', to: '2026-05-06' })
+      .expect(200);
+
+    expect(body).toHaveLength(0);
   });
 
   // ── missing brandId → 400 ────────────────────────────────────────────────
@@ -409,6 +524,8 @@ describe('GET /customers/:id (e2e)', () => {
   let app: INestApplication;
   let mongod: MongoMemoryServer;
   let CustomerModel: CM;
+  let ConvModel: ConvM;
+  let OperatorModel: Model<Operator>;
 
   beforeAll(async () => {
     mongod = await MongoMemoryServer.create();
@@ -422,6 +539,8 @@ describe('GET /customers/:id (e2e)', () => {
     app = module.createNestApplication();
     await app.init();
     CustomerModel = module.get<CM>(getModelToken(Customer.name));
+    ConvModel = module.get<ConvM>(getModelToken(Conversation.name));
+    OperatorModel = module.get<Model<Operator>>(getModelToken(Operator.name));
   });
 
   afterAll(async () => {
@@ -431,6 +550,8 @@ describe('GET /customers/:id (e2e)', () => {
 
   beforeEach(async () => {
     await CustomerModel.deleteMany({});
+    await ConvModel.deleteMany({});
+    await OperatorModel.deleteMany({});
   });
 
   it('returns full customer fields', async () => {
@@ -462,6 +583,74 @@ describe('GET /customers/:id (e2e)', () => {
     expect(body.lastOrder).toMatchObject({ id: 'ORD-001', placedAt: expect.any(String) });
   });
 
+  // ── assignee resolution (one operator per customer) ──────────────────────
+
+  it('returns the assignee resolved from any of the customer\'s conversations', async () => {
+    const marco = await OperatorModel.create({ name: 'Marco Rossi', email: 'marco@x.com' });
+    const c = await CustomerModel.create({
+      brandId: BRAND, name: 'Anna', lastActivityAt: new Date('2024-06-10'),
+    });
+    // Business rule: all of a customer's conversations share the same assigneeId.
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: c._id, channel: 'whatsapp', status: 'managed', type: 'inbound', assigneeId: marco._id, lastActivityAt: new Date('2024-06-09') },
+      { brandId: BRAND, customerId: c._id, channel: 'email', status: 'managed', type: 'inbound', assigneeId: marco._id, lastActivityAt: new Date('2024-06-10') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get(`/customers/${c._id}`)
+      .expect(200);
+
+    expect(body.assignee).toEqual({ _id: marco._id.toString(), name: 'Marco Rossi' });
+  });
+
+  it('resolves assignee to the operator on the most recent assigned conversation', async () => {
+    // Defends the rule-violation case: if a customer ends up with mixed
+    // assigneeIds across conversations, the detail view must pick the same
+    // operator the list filter would, i.e. the most-recent assigned one.
+    const marco = await OperatorModel.create({ name: 'Marco Rossi', email: 'marco2@x.com' });
+    const giulia = await OperatorModel.create({ name: 'Giulia Bianchi', email: 'giulia@x.com' });
+    const c = await CustomerModel.create({
+      brandId: BRAND, name: 'Anna', lastActivityAt: new Date('2024-06-10'),
+    });
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: c._id, channel: 'email', status: 'managed', type: 'inbound', assigneeId: giulia._id, lastActivityAt: new Date('2024-06-01') },
+      { brandId: BRAND, customerId: c._id, channel: 'whatsapp', status: 'managed', type: 'inbound', assigneeId: marco._id, lastActivityAt: new Date('2024-06-10') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get(`/customers/${c._id}`)
+      .expect(200);
+
+    expect(body.assignee).toEqual({ _id: marco._id.toString(), name: 'Marco Rossi' });
+  });
+
+  it('returns assignee: null when all of the customer\'s conversations are unassigned', async () => {
+    const c = await CustomerModel.create({
+      brandId: BRAND, name: 'Roberto', lastActivityAt: new Date('2024-06-10'),
+    });
+    await ConvModel.insertMany([
+      { brandId: BRAND, customerId: c._id, channel: 'whatsapp', status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-06-10') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get(`/customers/${c._id}`)
+      .expect(200);
+
+    expect(body.assignee).toBeNull();
+  });
+
+  it('returns assignee: null when the customer has no conversations', async () => {
+    const c = await CustomerModel.create({
+      brandId: BRAND, name: 'NewCustomer', lastActivityAt: new Date('2024-06-10'),
+    });
+
+    const { body } = await request(app.getHttpServer())
+      .get(`/customers/${c._id}`)
+      .expect(200);
+
+    expect(body.assignee).toBeNull();
+  });
+
   it('returns 404 for unknown customer id', async () => {
     await request(app.getHttpServer())
       .get(`/customers/${new Types.ObjectId()}`)
@@ -472,5 +661,73 @@ describe('GET /customers/:id (e2e)', () => {
     await request(app.getHttpServer())
       .get('/customers/not-an-id')
       .expect(400);
+  });
+});
+
+// The FilterPanel's Tags chip list previously derived its options from the
+// currently-loaded (filter-narrowed) customer list. Clicking a tag therefore
+// collapsed the list of available tags to only those carried by the matching
+// customers — every other tag visibly disappeared. The fix exposes the full
+// brand-wide tag set as a dedicated endpoint that the frontend can consume
+// independently of any filter state.
+describe('GET /customers/tags (e2e)', () => {
+  let app: INestApplication;
+  let mongod: MongoMemoryServer;
+  let CustomerModel: CM;
+
+  beforeAll(async () => {
+    mongod = await MongoMemoryServer.create();
+    const module = await Test.createTestingModule({
+      imports: [
+        MongooseModule.forRoot(mongod.getUri()),
+        CustomersModule,
+      ],
+    }).compile();
+
+    app = module.createNestApplication();
+    await app.init();
+    CustomerModel = module.get<CM>(getModelToken(Customer.name));
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await mongod.stop();
+  });
+
+  beforeEach(async () => {
+    await CustomerModel.deleteMany({});
+  });
+
+  it('returns every distinct tag carried by any customer of the brand, sorted', async () => {
+    await CustomerModel.create([
+      { brandId: BRAND, name: 'A', tags: ['vip', 'loyal'], lastActivityAt: new Date('2024-01-01') },
+      { brandId: BRAND, name: 'B', tags: ['vip', 'churn-risk'], lastActivityAt: new Date('2024-01-02') },
+      { brandId: BRAND, name: 'C', tags: [], lastActivityAt: new Date('2024-01-03') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers/tags')
+      .query({ brandId: BRAND.toString() })
+      .expect(200);
+
+    expect(body).toEqual(['churn-risk', 'loyal', 'vip']);
+  });
+
+  it('does not leak tags from other brands', async () => {
+    await CustomerModel.create([
+      { brandId: BRAND, name: 'Ours', tags: ['ours'], lastActivityAt: new Date('2024-01-01') },
+      { brandId: OTHER_BRAND, name: 'Theirs', tags: ['theirs'], lastActivityAt: new Date('2024-01-01') },
+    ]);
+
+    const { body } = await request(app.getHttpServer())
+      .get('/customers/tags')
+      .query({ brandId: BRAND.toString() })
+      .expect(200);
+
+    expect(body).toEqual(['ours']);
+  });
+
+  it('returns 400 when brandId is missing', async () => {
+    await request(app.getHttpServer()).get('/customers/tags').expect(400);
   });
 });

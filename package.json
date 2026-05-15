@@ -1,12 +1,19 @@
 {
   "name": "textyess",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "turbo run dev",
+    "dev": "npm run db:up && turbo run dev",
     "build": "turbo run build",
-    "web": "npm run dev --workspace=apps/web"
+    "web": "npm run dev --workspace=apps/web",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "db:up": "docker start textyess-mongo 2>/dev/null || docker run -d --name textyess-mongo -p 27017:27017 -v textyess-mongo-data:/data/db mongo:7"
   },
+  "packageManager": "npm@10.1.0",
   "devDependencies": {
     "turbo": "^2.0.0"
   }

@@ -9,7 +9,7 @@ The e-commerce company that subscribes to TextYess and whose operators use the i
 _Avoid_: Tenant, organization, account, shop
 
 **Operator**:
-A human agent working for a Brand who triages and responds to conversations. Stored in a minimal `operators` collection: `_id`, `name`, `email`. Seeded with 3–4 fake operators for the demo. Conversations reference an Operator via `assigneeId` (nullable — a Conversation may be unassigned).
+A human agent working for a Brand who triages and responds to conversations. Stored in a minimal `operators` collection: `_id`, `name`, `email`. Seeded with 3–4 fake operators for the demo. Conversations reference an Operator via `assigneeId` (nullable — a Conversation may be unassigned). A Customer has at most one assigned Operator at a time — see Business rules.
 _Avoid_: User, agent, rep
 
 **Conversation**:
@@ -54,6 +54,7 @@ _Avoid_: Event, entry, item
 - **On-site** Conversations are always AI-managed — the operator reply box is never rendered
 - **Voice** Conversations are always initiated by the Customer (always inbound) — the AI toggle is not rendered
 - **On-site** Conversations can be initiated by anonymous visitors or logged-in customers. For anonymous visitors, `visitorId` is a generated session ID and a sparse Customer record is created. For logged-in customers, `visitorId === customerId` — the Conversation is automatically linked to the existing Customer record at creation time.
+- A **Customer** has at most one assigned **Operator** at a time. All of a Customer's Conversations share the same `assigneeId` (or are unassigned), regardless of channel. Ownership is conceptually at the Customer level even though `assigneeId` is stored per-Conversation — keeping it per-Conversation avoids a schema change and lets unassigned channels stay null, but every write must keep the values consistent across that Customer's Conversations.
 
 ## Message storage
 

@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema } from 'mongoose';
-import type { SentBy, MessageType } from './types';
+import type { SentBy, MessageType, Attachment } from './types';
 
 export type MessageDocument = HydratedDocument<Message>;
 
@@ -20,6 +20,12 @@ export class Message {
 
   @Prop({ required: true })
   sentAt: Date;
+
+  @Prop({
+    type: [{ filename: String, size: Number, mimeType: String, _id: false }],
+    default: undefined,
+  })
+  attachments?: Attachment[];
 }
 
 export const MessageSchema = SchemaFactory.createForClass(Message);

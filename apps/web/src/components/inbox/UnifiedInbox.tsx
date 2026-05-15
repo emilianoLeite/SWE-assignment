@@ -2,71 +2,28 @@
 
 // Three-column layout: customer list | timeline | customer details panel
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   Search, Filter, Ban, Copy,
   ExternalLink, Paperclip, Smile, Send, Plus,
+  ChevronDown, X,
 } from "lucide-react";
-import { StatusBadge, CustomerAvatar, CHANNEL_CONFIG, timeAgo, formatTime } from "./shared";
+import { StatusBadge, CustomerAvatar, CHANNEL_CONFIG, timeAgo, formatTime, blockHeaderTime, sameLocalDay, formatDayLabel } from "./shared";
 import type { Channel } from "./shared";
-
-// ─── API types ────────────────────────────────────────────────────────────────
+import type {
+  Attachment,
+  CustomerDetail as ApiCustomerDetail,
+  CustomerFilters,
+  CustomerListItem as ApiCustomer,
+  TimelineBlock as ApiTimelineBlock,
+} from "@textyess/models";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 const BRAND_ID = "aaaaaaaaaaaaaaaaaaaaaaaa";
 
-interface ApiCustomer {
-  _id: string;
-  name: string;
-  lastActivityAt: string;
-  urgencyStatus: "ai_controlled" | "to_manage" | "managed" | "blocked" | "human_controlled";
-  tags: string[];
-}
-
-interface ApiCustomerDetail {
-  _id: string;
-  name: string;
-  email: string;
-  phone: string;
-  lifetimeSpend: number;
-  tags: string[];
-  notes: string | null;
-  lastOrder: { id: string; placedAt: string } | null;
-  createdAt: string;
-}
-
-interface ApiTimelineBlock {
-  channel: Channel;
-  conversationId: string;
-  aiActive: boolean;
-  blockStart: string;
-  channelData: {
-    subject?: string;
-    duration?: string;
-    outcome?: string;
-    transcript?: Array<{ speaker: "ai" | "customer"; text: string }>;
-  };
-  messages: Array<{
-    _id: string;
-    sentBy: "customer" | "ai" | "operator";
-    content: string;
-    type: string;
-    sentAt: string;
-  }>;
-}
-
-interface FilterParams {
-  status?: string;
-  assigneeId?: string;
-  tags?: string[];
-  campaign?: string;
-  from?: string;
-  to?: string;
-}
-
-function useCustomers(filters: FilterParams = {}) {
+function useCustomers(filters: CustomerFilters = {}) {
   const params = new URLSearchParams({ brandId: BRAND_ID });
   if (filters.status) params.set("status", filters.status);
   if (filters.assigneeId) params.set("assigneeId", filters.assigneeId);
@@ -102,6 +59,17 @@ function useCampaigns() {
     queryFn: () =>
       fetch(`${API_URL}/conversations/campaigns?brandId=${BRAND_ID}`).then((r) => {
         if (!r.ok) throw new Error("Failed to fetch campaigns");
+        return r.json();
+      }),
+  });
+}
+
+function useTags() {
+  return useQuery<string[]>({
+    queryKey: ["customer-tags", BRAND_ID],
+    queryFn: () =>
+      fetch(`${API_URL}/customers/tags?brandId=${BRAND_ID}`).then((r) => {
+        if (!r.ok) throw new Error("Failed to fetch tags");
         return r.json();
       }),
   });
@@ -164,6 +132,7 @@ function apiBlocksToFrontend(apiBlocks: ApiTimelineBlock[]): ConversationBlock[]
       content: msg.content,
       sentAt: msg.sentAt,
       emailSubject: block.channelData.subject,
+      attachments: msg.attachments,
     }));
 
     return {
@@ -188,6 +157,7 @@ interface TimelineEntry {
   transcriptLines?: { speaker: "ai" | "customer"; text: string }[];
   voiceMeta?: { duration: string; outcome: string };
   emailSubject?: string;
+  attachments?: Attachment[];
 }
 
 interface ConversationBlock {
@@ -212,21 +182,18 @@ const STATUS_OPTIONS = [
 function FilterPanel({
   filters,
   onFiltersChange,
-  customers,
 }: {
-  filters: FilterParams;
-  onFiltersChange: (f: FilterParams) => void;
-  customers: ApiCustomer[] | undefined;
+  filters: CustomerFilters;
+  onFiltersChange: (f: CustomerFilters) => void;
 }) {
   const { data: operators } = useOperators();
   const { data: campaigns } = useCampaigns();
+  // Sourced from a brand-wide endpoint, not the filtered customer list —
+  // otherwise selecting a tag would shrink the customer set and the other
+  // tag chips would disappear from the panel.
+  const { data: availableTags = [] } = useTags();
 
-  const availableTags = useMemo(() => {
-    if (!customers) return [];
-    return Array.from(new Set(customers.flatMap((c) => c.tags ?? []))).sort();
-  }, [customers]);
-
-  function setFilter<K extends keyof FilterParams>(key: K, value: FilterParams[K] | undefined) {
+  function setFilter<K extends keyof CustomerFilters>(key: K, value: CustomerFilters[K] | undefined) {
     const next = { ...filters };
     if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) {
       delete next[key];
@@ -348,7 +315,7 @@ function FilterPanel({
       {activeCount > 0 && (
         <button
           onClick={() => onFiltersChange({})}
-          className="text-[11px] text-destructive-500 hover:text-destructive-700 font-medium"
+          className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg bg-primary-500 text-white hover:bg-primary-600 transition-colors shadow-sm"
         >
           Clear all filters
         </button>
@@ -367,8 +334,8 @@ function CustomerList({
 }: {
   selectedId: string;
   onSelect: (id: string) => void;
-  filters: FilterParams;
-  onFiltersChange: (f: FilterParams) => void;
+  filters: CustomerFilters;
+  onFiltersChange: (f: CustomerFilters) => void;
 }) {
   const [showFilters, setShowFilters] = useState(false);
   const { data: customers, isLoading, isError } = useCustomers(filters);
@@ -380,10 +347,12 @@ function CustomerList({
       {/* Search + filter row */}
       <div className="px-3 pt-3 pb-2 flex items-center gap-2 border-b border-neutral-100">
         <div className="relative flex-1">
-          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-300" />
           <input
             placeholder="Search messages"
-            className="w-full text-xs pl-7 pr-2 py-1.5 bg-neutral-100 rounded-lg border-0 focus:outline-none focus:ring-2 focus:ring-primary-200 placeholder:text-neutral-400"
+            disabled
+            title="Not implemented yet"
+            className="w-full text-xs pl-7 pr-2 py-1.5 bg-neutral-100 rounded-lg border-0 focus:outline-none placeholder:text-neutral-400 disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
         <button
@@ -406,7 +375,7 @@ function CustomerList({
 
       {/* Filter panel */}
       {showFilters && (
-        <FilterPanel filters={filters} onFiltersChange={onFiltersChange} customers={customers} />
+        <FilterPanel filters={filters} onFiltersChange={onFiltersChange} />
       )}
 
       {/* Customer rows */}
@@ -450,19 +419,49 @@ function CustomerList({
 
 // ─── Message bubble ───────────────────────────────────────────────────────────
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function attachmentIcon(mimeType: string): string {
+  if (mimeType.startsWith("image/")) return "🖼️";
+  if (mimeType === "application/pdf") return "📄";
+  return "📎";
+}
+
+function AttachmentList({ attachments }: { attachments: Attachment[] }) {
+  return (
+    <div className="mt-2 space-y-1">
+      {attachments.map((a, i) => (
+        <div
+          key={i}
+          className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-black/5 border border-black/5 text-[12px]"
+          title={`${a.filename} · ${formatBytes(a.size)}`}
+        >
+          <span className="text-sm leading-none shrink-0">{attachmentIcon(a.mimeType)}</span>
+          <span className="truncate flex-1 text-neutral-800">{a.filename}</span>
+          <span className="text-[10px] text-neutral-500 shrink-0">{formatBytes(a.size)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MessageBubble({ entry }: { entry: TimelineEntry }) {
   if (entry.isTranscript) return null;
   const isCustomer = entry.sentBy === "customer";
+  const isEmail = entry.channel === "email";
   const cfg = CHANNEL_CONFIG[entry.channel];
+  const maxWidth = isEmail ? "max-w-[88%]" : "max-w-[68%]";
 
   return (
     <div className={`flex ${isCustomer ? "justify-start" : "justify-end"} mb-2`}>
       <div
-        className={`max-w-[68%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed ${
+        className={`${maxWidth} rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed ${
           isCustomer
             ? "bg-white border border-neutral-200 text-neutral-800 rounded-tl-sm shadow-sm"
-            : entry.sentBy === "operator"
-            ? "bg-primary-100 text-primary-900 rounded-tr-sm"
             : `${cfg.bubble} text-neutral-800 rounded-tr-sm`
         }`}
       >
@@ -471,7 +470,10 @@ function MessageBubble({ entry }: { entry: TimelineEntry }) {
             {entry.sentBy === "operator" ? "Operator" : "AI"}
           </p>
         )}
-        <p>{entry.content}</p>
+        <p className="whitespace-pre-wrap">{entry.content}</p>
+        {entry.attachments && entry.attachments.length > 0 && (
+          <AttachmentList attachments={entry.attachments} />
+        )}
         <p className="text-[10px] opacity-40 mt-1 text-right">{formatTime(entry.sentAt)}</p>
       </div>
     </div>
@@ -501,26 +503,54 @@ function VoiceTranscript({ entry }: { entry: TimelineEntry }) {
 
 function BlockView({ block }: { block: ConversationBlock }) {
   const cfg = CHANNEL_CONFIG[block.channel];
+  const [expanded, setExpanded] = useState(true);
   return (
     <div className="rounded-xl overflow-hidden border border-neutral-200 mb-4 shadow-sm">
-      <div className={`flex items-center justify-between px-4 py-2 ${cfg.headerBg} ${cfg.headerText}`}>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className="w-full flex items-center justify-between px-4 py-2 text-left bg-white text-neutral-800 border-b border-neutral-200"
+      >
         <div className="flex items-center gap-2">
           <span className="text-sm">{cfg.icon}</span>
           <span className="text-[13px] font-semibold">{cfg.label}</span>
           {block.channel === "email" && block.emailSubject && (
-            <span className="text-[12px] opacity-80 truncate max-w-[180px]">— {block.emailSubject}</span>
+            <span className="text-[12px] text-neutral-500 truncate max-w-[180px]">— {block.emailSubject}</span>
           )}
           {block.channel === "voice" && block.voiceMeta && (
-            <span className="text-[12px] opacity-80">· {block.voiceMeta.duration} · {block.voiceMeta.outcome}</span>
+            <span className="text-[12px] text-neutral-500">· {block.voiceMeta.duration} · {block.voiceMeta.outcome}</span>
           )}
         </div>
-        <span className="text-[11px] opacity-70">{timeAgo(block.blockStart)}</span>
-      </div>
-      <div className={`px-4 py-3 ${cfg.blockBg}`}>
-        {block.channel === "voice"
-          ? block.entries[0] && <VoiceTranscript entry={block.entries[0]} />
-          : block.entries.map((e, i) => <MessageBubble key={i} entry={e} />)}
-      </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-neutral-500">{blockHeaderTime(block.blockStart)}</span>
+          <ChevronDown className={`w-4 h-4 text-neutral-500 transition-transform ${expanded ? "" : "-rotate-90"}`} />
+        </div>
+      </button>
+      {expanded && (
+        <div className={`px-4 py-3 ${cfg.blockBg}`}>
+          {block.channel === "voice"
+            ? block.entries[0] && <VoiceTranscript entry={block.entries[0]} />
+            : block.entries.map((e, i) => {
+                const prev = i === 0 ? block.blockStart : block.entries[i - 1].sentAt;
+                const showDay = !sameLocalDay(prev, e.sentAt);
+                return (
+                  <div key={i}>
+                    {showDay && (
+                      <div className="flex items-center gap-2 my-3">
+                        <div className="flex-1 h-px bg-neutral-300/60" />
+                        <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-500">
+                          {formatDayLabel(e.sentAt)}
+                        </span>
+                        <div className="flex-1 h-px bg-neutral-300/60" />
+                      </div>
+                    )}
+                    <MessageBubble entry={e} />
+                  </div>
+                );
+              })}
+        </div>
+      )}
     </div>
   );
 }
@@ -545,7 +575,7 @@ function useToggleAi(customerId: string) {
   });
 }
 
-function TimelinePanel({ customerId, apiCustomer }: { customerId: string; apiCustomer?: ApiCustomerDetail }) {
+function TimelinePanel({ customerId, apiCustomer, onToggleDetails, onOpenDetails }: { customerId: string; apiCustomer?: ApiCustomerDetail; onToggleDetails: () => void; onOpenDetails: () => void }) {
   const [replyChannel, setReplyChannel] = useState<Channel>("whatsapp");
   const { data: apiBlocks, isLoading: timelineLoading } = useTimeline(customerId);
   const toggleAi = useToggleAi(customerId);
@@ -573,6 +603,15 @@ function TimelinePanel({ customerId, apiCustomer }: { customerId: string; apiCus
   const canReply = !!activeChannelState?.hasConv && !activeChannelState?.aiActive;
   const hasReplyableChannel = replyChannels.some((rc) => rc.hasConv);
 
+  // If the selected channel has no conversation for this customer, fall back to
+  // the first channel that does — otherwise the selected button shows as "active"
+  // while actually being disabled, which is confusing.
+  useEffect(() => {
+    if (activeChannelState?.hasConv) return;
+    const firstAvailable = replyChannels.find((rc) => rc.hasConv);
+    if (firstAvailable) setReplyChannel(firstAvailable.channel);
+  }, [activeChannelState?.hasConv, replyChannels]);
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-[#f9f8f6] min-w-0">
       {/* Conversation header */}
@@ -580,9 +619,14 @@ function TimelinePanel({ customerId, apiCustomer }: { customerId: string; apiCus
         <div className="flex items-center gap-3 min-w-0">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[15px] font-semibold text-neutral-900 truncate">
+              <button
+                type="button"
+                onClick={onToggleDetails}
+                disabled={!apiCustomer}
+                className="text-[15px] font-semibold text-neutral-900 truncate hover:text-primary-600 hover:underline disabled:cursor-default disabled:hover:no-underline disabled:hover:text-neutral-900"
+              >
                 {apiCustomer?.name ?? ""}
-              </span>
+              </button>
               {apiCustomer?.phone && (
                 <>
                   <span className="text-neutral-400 text-sm">·</span>
@@ -590,8 +634,20 @@ function TimelinePanel({ customerId, apiCustomer }: { customerId: string; apiCus
                 </>
               )}
             </div>
+            {apiCustomer && (
+              <p className="text-[12px] text-neutral-500 mt-0.5">
+                Assigned to:{" "}
+                <span className={apiCustomer.assignee ? "text-neutral-700 font-medium" : "italic text-neutral-400"}>
+                  {apiCustomer.assignee?.name ?? "Unassigned"}
+                </span>
+              </p>
+            )}
             <div className="flex items-center gap-2 mt-1.5">
-              <button className="flex items-center gap-1 text-[12px] text-neutral-600 border border-neutral-300 rounded-md px-2 py-0.5 hover:bg-neutral-50 transition-colors font-medium">
+              <button
+                onClick={onOpenDetails}
+                disabled={!apiCustomer}
+                className="flex items-center gap-1 text-[12px] text-neutral-600 border border-neutral-300 rounded-md px-2 py-0.5 hover:bg-neutral-50 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 <Plus className="w-3 h-3" />
                 MANAGE TAGS
               </button>
@@ -616,21 +672,23 @@ function TimelinePanel({ customerId, apiCustomer }: { customerId: string; apiCus
       {/* Reply bar */}
       {hasReplyableChannel && (
         <div className="bg-white border-t border-neutral-200 px-4 py-2.5">
-          <div className="flex gap-1 mb-2">
-            {replyChannels.map(({ channel, hasConv }) => (
-              <button
-                key={channel}
-                onClick={() => setReplyChannel(channel)}
-                disabled={!hasConv}
-                className={`text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition-colors ${
-                  replyChannel === channel
-                    ? "bg-primary-500 text-white border-primary-500"
-                    : "bg-white text-neutral-500 border-neutral-200 hover:border-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed"
-                }`}
-              >
-                {CHANNEL_CONFIG[channel].icon} {CHANNEL_CONFIG[channel].label}
-              </button>
-            ))}
+          <div className="flex items-center gap-1 mb-2 justify-end">
+            <span className="text-[11px] text-neutral-500 mr-1">Reply through:</span>
+            {replyChannels
+              .filter(({ hasConv }) => hasConv)
+              .map(({ channel }) => (
+                <button
+                  key={channel}
+                  onClick={() => setReplyChannel(channel)}
+                  className={`text-[11px] px-2.5 py-0.5 rounded-full font-medium border transition-colors ${
+                    replyChannel === channel
+                      ? "bg-primary-500 text-white border-primary-500"
+                      : "bg-white text-neutral-500 border-neutral-200 hover:border-neutral-300"
+                  }`}
+                >
+                  {CHANNEL_CONFIG[channel].icon} {CHANNEL_CONFIG[channel].label}
+                </button>
+              ))}
           </div>
 
           <div className="flex items-center gap-2">
@@ -700,7 +758,7 @@ function Field({ label, value, copyable }: { label: string; value: string; copya
   );
 }
 
-function CustomerDetailsPanel({ customer, isLoading }: { customer: ApiCustomerDetail | undefined; isLoading: boolean }) {
+function CustomerDetailsPanel({ customer, isLoading, onClose }: { customer: ApiCustomerDetail | undefined; isLoading: boolean; onClose: () => void }) {
   const createdDaysAgo = customer
     ? Math.round((Date.now() - new Date(customer.createdAt).getTime()) / 86_400_000)
     : 0;
@@ -723,7 +781,15 @@ function CustomerDetailsPanel({ customer, isLoading }: { customer: ApiCustomerDe
 
   return (
     <div className="w-60 shrink-0 border-l border-neutral-200 bg-white flex flex-col overflow-y-auto">
-      <div className="px-4 py-2 border-b border-neutral-100 flex justify-end">
+      <div className="px-4 py-2 border-b border-neutral-100 flex justify-between items-center">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close customer details"
+          className="text-neutral-400 hover:text-neutral-700 transition-colors"
+        >
+          <X className="w-4 h-4" />
+        </button>
         <button className="flex items-center gap-1 text-[11px] text-neutral-400 hover:text-primary-500 transition-colors">
           Go to contacts page
           <ExternalLink className="w-3 h-3" />
@@ -808,8 +874,8 @@ function PageHeader() {
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
-function filtersFromSearchParams(sp: ReturnType<typeof useSearchParams>): FilterParams {
-  const filters: FilterParams = {};
+function filtersFromSearchParams(sp: ReturnType<typeof useSearchParams>): CustomerFilters {
+  const filters: CustomerFilters = {};
   const status = sp.get("status");
   if (status) filters.status = status;
   const assigneeId = sp.get("assigneeId");
@@ -825,14 +891,15 @@ function filtersFromSearchParams(sp: ReturnType<typeof useSearchParams>): Filter
   return filters;
 }
 
-export default function VariantA() {
+export default function UnifiedInbox() {
   const [selectedId, setSelectedId] = useState<string>("");
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const searchParams = useSearchParams();
   const router = useRouter();
 
   const filters = useMemo(() => filtersFromSearchParams(searchParams), [searchParams]);
 
-  const handleFiltersChange = useCallback((next: FilterParams) => {
+  const handleFiltersChange = useCallback((next: CustomerFilters) => {
     const sp = new URLSearchParams();
     if (next.status) sp.set("status", next.status);
     if (next.assigneeId) sp.set("assigneeId", next.assigneeId);
@@ -840,6 +907,8 @@ export default function VariantA() {
     if (next.campaign) sp.set("campaign", next.campaign);
     if (next.from) sp.set("from", next.from);
     if (next.to) sp.set("to", next.to);
+    setSelectedId("");
+    setDetailsOpen(false);
     router.replace(`?${sp.toString()}`);
   }, [router]);
 
@@ -855,8 +924,19 @@ export default function VariantA() {
           filters={filters}
           onFiltersChange={handleFiltersChange}
         />
-        <TimelinePanel customerId={selectedId} apiCustomer={apiCustomer} />
-        <CustomerDetailsPanel customer={apiCustomer} isLoading={!!selectedId && detailLoading} />
+        <TimelinePanel
+          customerId={selectedId}
+          apiCustomer={apiCustomer}
+          onToggleDetails={() => setDetailsOpen((v) => !v)}
+          onOpenDetails={() => setDetailsOpen(true)}
+        />
+        {detailsOpen && (
+          <CustomerDetailsPanel
+            customer={apiCustomer}
+            isLoading={!!selectedId && detailLoading}
+            onClose={() => setDetailsOpen(false)}
+          />
+        )}
       </div>
     </div>
   );

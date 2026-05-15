@@ -20,6 +20,31 @@ export function formatTime(dateStr: string): string {
   return new Date(dateStr).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
 }
 
+export function blockHeaderTime(dateStr: string): string {
+  const date = new Date(dateStr);
+  const diff = Date.now() - date.getTime();
+  if (diff < 86_400_000) {
+    const relative = timeAgo(dateStr);
+    return relative === "just now" ? relative : `${relative} ago`;
+  }
+  return date.toLocaleDateString("it-IT", { day: "numeric", month: "short", year: "numeric" });
+}
+
+export function sameLocalDay(a: Date | string, b: Date | string): boolean {
+  const da = typeof a === "string" ? new Date(a) : a;
+  const db = typeof b === "string" ? new Date(b) : b;
+  return (
+    da.getFullYear() === db.getFullYear() &&
+    da.getMonth() === db.getMonth() &&
+    da.getDate() === db.getDate()
+  );
+}
+
+export function formatDayLabel(dateStr: string | Date): string {
+  const date = typeof dateStr === "string" ? new Date(dateStr) : dateStr;
+  return date.toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+}
+
 // ─── Status config ───────────────────────────────────────────────────────────
 
 export const STATUS_CONFIG: Record<Status, { label: string; dot: string; bg: string; text: string; border: string }> = {
@@ -66,20 +91,20 @@ export const CHANNEL_CONFIG: Record<Channel, { label: string; icon: string; head
   whatsapp: {
     label: "WhatsApp",
     icon: "💬",
-    headerBg: "bg-[#25D366]",
+    headerBg: "bg-[#34a853]",
     headerText: "text-white",
-    blockBorder: "border-l-[#25D366]",
+    blockBorder: "border-l-[#34a853]",
     blockBg: "bg-[#f0fdf4]",
     bubble: "bg-[#dcfce7]",
   },
   email: {
     label: "Email",
     icon: "✉️",
-    headerBg: "bg-primary-500",
+    headerBg: "bg-[#0ea5e9]",
     headerText: "text-white",
-    blockBorder: "border-l-primary-400",
-    blockBg: "bg-primary-50",
-    bubble: "bg-primary-100",
+    blockBorder: "border-l-[#38bdf8]",
+    blockBg: "bg-[#f0f9ff]",
+    bubble: "bg-[#e0f2fe]",
   },
   voice: {
     label: "Voice",
@@ -93,9 +118,9 @@ export const CHANNEL_CONFIG: Record<Channel, { label: string; icon: string; head
   onsite: {
     label: "On-site",
     icon: "🌐",
-    headerBg: "bg-warning-500",
+    headerBg: "bg-[#e68a1f]",
     headerText: "text-white",
-    blockBorder: "border-l-warning-400",
+    blockBorder: "border-l-[#e68a1f]",
     blockBg: "bg-warning-100",
     bubble: "bg-warning-200",
   },

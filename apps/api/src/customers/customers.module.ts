@@ -4,6 +4,7 @@ import {
   Customer, CustomerSchema,
   Conversation, ConversationSchema,
   Message, MessageSchema,
+  Operator, OperatorSchema,
 } from '@textyess/models';
 import { CustomersController } from './customers.controller';
 import { CustomersService } from './customers.service';
@@ -14,6 +15,7 @@ import { CustomersService } from './customers.service';
       { name: Customer.name, schema: CustomerSchema },
       { name: Conversation.name, schema: ConversationSchema },
       { name: Message.name, schema: MessageSchema },
+      { name: Operator.name, schema: OperatorSchema },
     ]),
   ],
   controllers: [CustomersController],

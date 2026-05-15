@@ -1,8 +1,8 @@
 "use client";
 
-import TopBar from "@/components/prototype/TopBar";
-import Sidebar from "@/components/prototype/Sidebar";
-import VariantA from "@/components/prototype/VariantA";
+import TopBar from "@/components/inbox/TopBar";
+import Sidebar from "@/components/inbox/Sidebar";
+import UnifiedInbox from "@/components/inbox/UnifiedInbox";
 
 export default function InboxShell() {
   return (
@@ -11,7 +11,7 @@ export default function InboxShell() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 flex flex-col overflow-hidden bg-background">
-          <VariantA />
+          <UnifiedInbox />
         </main>
       </div>
     </div>

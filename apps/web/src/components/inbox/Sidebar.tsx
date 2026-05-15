@@ -45,7 +45,7 @@ function NavItem({ icon: Icon, label, active = false }: { icon: LucideIcon; labe
     <button
       className={`flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] w-full text-left transition-colors ${
         active
-          ? "bg-primary-500/15 text-primary-300"
+          ? "bg-white/15 text-white"
           : "text-neutral-400 hover:text-neutral-200 hover:bg-white/5"
       }`}
     >
@@ -57,7 +57,7 @@ function NavItem({ icon: Icon, label, active = false }: { icon: LucideIcon; labe
 
 export default function Sidebar() {
   return (
-    <aside className="w-[224px] bg-neutral-900 flex flex-col shrink-0 h-full overflow-hidden">
+    <aside className="w-[224px] bg-primary-900 flex flex-col shrink-0 h-full overflow-hidden">
       <nav className="flex-1 px-2 pt-2 pb-1 overflow-y-auto flex flex-col gap-0.5">
         {TOP_NAV.map(({ icon, label }) => (
           <NavItem key={label} icon={icon} label={label} />
@@ -75,14 +75,14 @@ export default function Sidebar() {
                 key={label}
                 className={`flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] w-full text-left transition-colors ${
                   active
-                    ? "bg-primary-500/15 text-primary-300"
+                    ? "bg-white/15 text-white"
                     : "text-neutral-400 hover:text-neutral-200 hover:bg-white/5"
                 }`}
               >
                 <Icon className="w-[15px] h-[15px] shrink-0" />
                 <span className="flex-1">{label}</span>
                 {isNew && (
-                  <span className="text-[9px] font-bold bg-primary-500 text-white rounded-full px-1.5 py-0.5 leading-none shrink-0">
+                  <span className="text-[9px] font-bold bg-white text-primary-900 rounded-full px-1.5 py-0.5 leading-none shrink-0">
                     NEW
                   </span>
                 )}
