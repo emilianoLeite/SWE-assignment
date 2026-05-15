@@ -509,14 +509,17 @@ function VoiceTranscript({ entry }: { entry: TimelineEntry }) {
   );
 }
 
-function BlockView({ block }: { block: ConversationBlock }) {
+function blockKey(block: ConversationBlock): string {
+  return `${block.conversationId}:${block.blockStart}`;
+}
+
+function BlockView({ block, expanded, onToggle }: { block: ConversationBlock; expanded: boolean; onToggle: () => void }) {
   const cfg = CHANNEL_CONFIG[block.channel];
-  const [expanded, setExpanded] = useState(true);
   return (
     <div className="rounded-xl overflow-hidden border border-neutral-200 mb-4 shadow-sm">
       <button
         type="button"
-        onClick={() => setExpanded((v) => !v)}
+        onClick={onToggle}
         aria-expanded={expanded}
         className="w-full flex items-center justify-between px-4 py-2 text-left bg-white text-neutral-800 border-b border-neutral-200"
       >
@@ -610,6 +613,14 @@ function TimelinePanel({ customerId, apiCustomer, onToggleDetails, onOpenDetails
     () => apiBlocksToFrontend(apiBlocks),
     [apiBlocks],
   );
+
+  // Per-block expanded state, keyed by a stable id derived from the API.
+  // Lifted out of BlockView so prepending older pages doesn't remount and
+  // reset the toggle. Missing entries default to expanded.
+  const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
+  const toggleBlock = useCallback((id: string) => {
+    setExpandedMap((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }));
+  }, []);
 
   const replyChannels = useMemo(() => {
     return (["whatsapp", "email"] as Channel[]).map((ch) => {
@@ -757,7 +768,17 @@ function TimelinePanel({ customerId, apiCustomer, onToggleDetails, onOpenDetails
                 {isFetchingNextPage ? "Loading older messages…" : "Scroll up to load older messages"}
               </div>
             )}
-            {blocks.map((block, i) => <BlockView key={block.blockStart + i} block={block} />)}
+            {blocks.map((block) => {
+              const id = blockKey(block);
+              return (
+                <BlockView
+                  key={id}
+                  block={block}
+                  expanded={expandedMap[id] ?? true}
+                  onToggle={() => toggleBlock(id)}
+                />
+              );
+            })}
           </>
         )}
       </div>

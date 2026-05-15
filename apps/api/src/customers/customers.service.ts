@@ -48,6 +48,15 @@ const RANK_TO_STATUS: PipelineStage.AddFields['$addFields'] = {
 
 export type FindCustomersParams = CustomerFilters & { brandId: string };
 
+interface RawEntry {
+  sortKey: Date;
+  convId: string;
+  channel: Channel;
+  aiActive: boolean;
+  message?: TimelineMessage;
+  isVoice: boolean;
+}
+
 @Injectable()
 export class CustomersService {
   constructor(
@@ -292,14 +301,7 @@ export class CustomersService {
       .sort({ sentAt: 1 })
       .lean();
 
-    interface RawEntry {
-      sortKey: Date;
-      convId: string;
-      channel: Channel;
-      aiActive: boolean;
-      message?: TimelineMessage;
-      isVoice: boolean;
-    }
+
 
     const entries: RawEntry[] = [];
 
