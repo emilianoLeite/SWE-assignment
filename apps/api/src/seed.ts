@@ -23,6 +23,7 @@ const operatorSchema = new Schema({ name: String, email: String }, { timestamps:
 const customerSchema = new Schema(
   {
     brandId: Schema.Types.ObjectId,
+    kind: { type: String, enum: ['anonymous', 'identified'], default: 'anonymous' },
     name: String,
     email: String,
     phone: String,
@@ -32,11 +33,13 @@ const customerSchema = new Schema(
     visitorId: String,
     lastOrder: { id: String, placedAt: Date },
     lastActivityAt: Date,
+    mergedInto: { type: Schema.Types.ObjectId, default: null },
   },
   { timestamps: true },
 );
 customerSchema.index({ brandId: 1, lastActivityAt: -1 });
-customerSchema.index({ brandId: 1, status: 1, lastActivityAt: -1 });
+customerSchema.index({ brandId: 1, kind: 1, lastActivityAt: -1 });
+customerSchema.index({ mergedInto: 1 }, { sparse: true });
 
 const transcriptLineSchema = new Schema({ speaker: String, text: String }, { _id: false });
 const channelDataSchema = new Schema(
@@ -116,9 +119,10 @@ export async function runSeed(conn: Connection): Promise<void> {
 
   // ── customers ────────────────────────────────────────────────────────────
   // lastActivityAt will be back-filled after messages are created
-  const [anna, roberto, chiara, davide, elena, francesca] = await Customer.insertMany([
+  const [anna, roberto, chiara, davide, elena, francesca, anonVisitor] = await Customer.insertMany([
     {
       brandId: BRAND_ID,
+      kind: 'identified',
       name: 'Anna Conti',
       email: 'anna.conti@email.it',
       phone: '+39 339 1234567',
@@ -130,6 +134,7 @@ export async function runSeed(conn: Connection): Promise<void> {
     },
     {
       brandId: BRAND_ID,
+      kind: 'identified',
       name: 'Roberto Mancini',
       email: 'roberto.mancini@gmail.com',
       phone: '+39 347 9876543',
@@ -140,6 +145,7 @@ export async function runSeed(conn: Connection): Promise<void> {
     },
     {
       brandId: BRAND_ID,
+      kind: 'identified',
       name: 'Chiara Lombardi',
       email: 'chiara.lombardi@libero.it',
       lifetimeSpend: 780,
@@ -149,6 +155,7 @@ export async function runSeed(conn: Connection): Promise<void> {
     },
     {
       brandId: BRAND_ID,
+      kind: 'identified',
       name: 'Davide Russo',
       email: 'davide.russo@yahoo.it',
       phone: '+39 333 5556677',
@@ -158,6 +165,7 @@ export async function runSeed(conn: Connection): Promise<void> {
     },
     {
       brandId: BRAND_ID,
+      kind: 'identified',
       name: 'Elena Martinelli',
       email: 'elena.martinelli@gmail.com',
       phone: '+39 320 4443322',
@@ -173,6 +181,7 @@ export async function runSeed(conn: Connection): Promise<void> {
     // conversation becomes its own Conversation Block.
     {
       brandId: BRAND_ID,
+      kind: 'identified',
       name: 'Francesca Greco',
       email: 'francesca.greco@email.it',
       phone: '+39 348 1122334',
@@ -181,6 +190,17 @@ export async function runSeed(conn: Connection): Promise<void> {
       notes: 'Cliente storica con interazioni frequenti su tutti i canali.',
       lastOrder: { id: 'ORD-10088', placedAt: hoursAgo(3) },
       lastActivityAt: hoursAgo(1),
+    },
+    // Anonymous visitor — only an on-site conversation, no email/phone yet.
+    // Identified by visitorId until they hand over contact details and get
+    // promoted in place (kind → 'identified').
+    {
+      brandId: BRAND_ID,
+      kind: 'anonymous',
+      name: 'Anonymous User',
+      tags: [],
+      visitorId: 'vis_anon_001',
+      lastActivityAt: hoursAgo(3),
     },
   ]);
 
@@ -209,6 +229,7 @@ export async function runSeed(conn: Connection): Promise<void> {
     fraOnsite2, // onsite   / ai_controlled / outbound
     fraEmail3,  // email    / managed     / inbound
     fraWa4,     // whatsapp / managed     / inbound  — oldest
+    anonOs,     // onsite   / ai_controlled / inbound — anonymous visitor
   ] = await Conversation.insertMany([
     {
       brandId: BRAND_ID,
@@ -472,6 +493,16 @@ export async function runSeed(conn: Connection): Promise<void> {
       aiActive: false,
       lastActivityAt: daysAgo(45),
     },
+    // anonymous visitor — single onsite chat, AI handling, no human assignee
+    {
+      brandId: BRAND_ID,
+      customerId: anonVisitor._id,
+      channel: 'onsite',
+      status: 'ai_controlled',
+      type: 'inbound',
+      aiActive: true,
+      lastActivityAt: hoursAgo(3),
+    },
   ]);
 
   // ── messages ─────────────────────────────────────────────────────────────
@@ -733,6 +764,11 @@ export async function runSeed(conn: Connection): Promise<void> {
     { conversationId: fraWa4._id, sentBy: 'customer', content: 'Salve, come funziona il programma fedeltà?', type: 'text', sentAt: daysAgo(46) },
     { conversationId: fraWa4._id, sentBy: 'ai', content: 'Ogni euro speso vale 1 punto: a 500 punti riceve uno sconto del 10% sull\'ordine successivo.', type: 'text', sentAt: daysAgoFractional(45.5) },
     { conversationId: fraWa4._id, sentBy: 'customer', content: 'Ottimo, grazie!', type: 'text', sentAt: daysAgo(45) },
+
+    // anonOs — Onsite / anonymous visitor browsing, no identification yet
+    { conversationId: anonOs._id, sentBy: 'ai', content: 'Ciao! Posso aiutarti a trovare qualcosa?', type: 'text', sentAt: hoursAgo(4) },
+    { conversationId: anonOs._id, sentBy: 'customer', content: 'Sto guardando le sneakers, fate spedizione in Svizzera?', type: 'text', sentAt: hoursAgo(3.5) },
+    { conversationId: anonOs._id, sentBy: 'ai', content: 'Sì, spediamo in Svizzera con corriere espresso (3-5 giorni lavorativi).', type: 'text', sentAt: hoursAgo(3) },
   ];
 
   await Message.insertMany(msgs);
@@ -746,9 +782,10 @@ export async function runSeed(conn: Connection): Promise<void> {
     elenaWa, elenaOs, elenaEmail,
     fraWa1, fraEmail1, fraOnsite1, fraWa2, fraVoice,
     fraEmail2, fraWa3, fraOnsite2, fraEmail3, fraWa4,
+    anonOs,
   ];
 
-  for (const customer of [anna, roberto, chiara, davide, elena, francesca]) {
+  for (const customer of [anna, roberto, chiara, davide, elena, francesca, anonVisitor]) {
     const customerConvIds = allConvs
       .filter((c) => c.customerId.toString() === customer._id.toString())
       .map((c) => c._id);

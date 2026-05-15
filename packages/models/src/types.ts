@@ -9,6 +9,7 @@ export type SentBy = 'customer' | 'ai' | 'operator';
 export type MessageType = 'text' | 'button' | 'media';
 export type ConversationType = 'inbound' | 'outbound';
 export type VoiceOutcome = 'Successful' | 'No answer' | 'Failed';
+export type CustomerKind = 'anonymous' | 'identified';
 
 export interface TranscriptLine {
   speaker: 'ai' | 'customer';
@@ -38,6 +39,7 @@ export interface IOperator {
 export interface ICustomer {
   _id: string;
   brandId: string;
+  kind: CustomerKind;
   name: string;
   email?: string;
   phone?: string;
@@ -47,6 +49,7 @@ export interface ICustomer {
   visitorId?: string;
   lastOrder?: LastOrder | null;
   lastActivityAt: Date;
+  mergedInto?: string | null;
   createdAt: Date;
 }
 
