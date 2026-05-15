@@ -521,6 +521,55 @@ describe('GET /customers/:id/timeline (e2e)', () => {
     expect(body).toEqual({ blocks: [], hasMore: false, nextCursor: null });
   });
 
+  it('returns non-voice blocks alongside voice blocks for the same customer', async () => {
+    const customer = await CustomerModel.create({
+      brandId: BRAND, name: 'Francesca', lastActivityAt: new Date('2024-06-10T12:00:00Z'),
+    });
+
+    const wa = await ConvModel.create({
+      brandId: BRAND, customerId: customer._id, channel: 'whatsapp',
+      status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-06-10T12:00:00Z'),
+    });
+    await ConvModel.create({
+      brandId: BRAND, customerId: customer._id, channel: 'voice',
+      status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-06-08T10:00:00Z'),
+      channelData: { duration: '2:10', outcome: 'Successful', transcript: [{ speaker: 'ai', text: 'Pronto?' }] },
+    });
+    const email = await ConvModel.create({
+      brandId: BRAND, customerId: customer._id, channel: 'email',
+      status: 'managed', type: 'inbound', lastActivityAt: new Date('2024-06-05T09:00:00Z'),
+      channelData: { subject: 'Conferma ordine' },
+    });
+
+    await MsgModel.insertMany([
+      { conversationId: email._id, sentBy: 'customer', content: 'Buongiorno', type: 'text', sentAt: new Date('2024-06-05T09:00:00Z') },
+      { conversationId: email._id, sentBy: 'ai', content: 'Conferma allegata', type: 'text', sentAt: new Date('2024-06-05T09:30:00Z') },
+      { conversationId: wa._id, sentBy: 'customer', content: 'Ciao!', type: 'text', sentAt: new Date('2024-06-10T11:00:00Z') },
+      { conversationId: wa._id, sentBy: 'ai', content: 'A presto', type: 'text', sentAt: new Date('2024-06-10T12:00:00Z') },
+    ]);
+    // The voice conversation deliberately has no message rows — it carries
+    // its content via channelData.transcript, like the seed does.
+
+    const { body } = await request(app.getHttpServer())
+      .get(`/customers/${customer._id}/timeline?limit=10`)
+      .expect(200);
+
+    const channels = body.blocks.map((b: { channel: string }) => b.channel);
+    expect(channels).toEqual(['email', 'voice', 'whatsapp']);
+
+    const waBlock = body.blocks[2];
+    expect(waBlock.messages).toHaveLength(2);
+    expect(waBlock.messages.map((m: { content: string }) => m.content)).toEqual(['Ciao!', 'A presto']);
+
+    const emailBlock = body.blocks[0];
+    expect(emailBlock.messages).toHaveLength(2);
+    expect(emailBlock.channelData.subject).toBe('Conferma ordine');
+
+    const voiceBlock = body.blocks[1];
+    expect(voiceBlock.messages).toHaveLength(0);
+    expect(voiceBlock.channelData.duration).toBe('2:10');
+  });
+
   // ── pagination: limit + before cursor ────────────────────────────────────
 
   it('paginates by block using limit and before cursor', async () => {

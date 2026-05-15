@@ -8,7 +8,6 @@ import {
   Operator, OperatorDocument,
 } from '@textyess/models';
 import type {
-  Channel,
   CustomerDetail,
   CustomerFilters,
   CustomerListItem,
@@ -47,15 +46,6 @@ const RANK_TO_STATUS: PipelineStage.AddFields['$addFields'] = {
 };
 
 export type FindCustomersParams = CustomerFilters & { brandId: string };
-
-interface RawEntry {
-  sortKey: Date;
-  convId: string;
-  channel: Channel;
-  aiActive: boolean;
-  message?: TimelineMessage;
-  isVoice: boolean;
-}
 
 @Injectable()
 export class CustomersService {
@@ -285,6 +275,8 @@ export class CustomersService {
 
     const customerOid = new Types.ObjectId(customerId);
 
+    // Bounded: a customer has at most a handful of conversations. Used to
+    // resolve channel / aiActive / channelData while building blocks below.
     const conversations = await this.convModel
       .find({ customerId: customerOid })
       .lean();
@@ -293,94 +285,139 @@ export class CustomersService {
       return { blocks: [], hasMore: false, nextCursor: null };
     }
 
-    const convIds = conversations.map((c) => c._id);
     const convMap = new Map(conversations.map((c) => [c._id.toString(), c]));
 
-    const messages = await this.messageModel
-      .find({ conversationId: { $in: convIds } })
-      .sort({ sentAt: 1 })
-      .lean();
+    // Voice "entries" live on the conversation itself (lastActivityAt as
+    // sortKey, no message rows). The voice set is tiny, so we materialise it
+    // up-front and merge it into the descending message stream below.
+    const voiceEntries = conversations
+      .filter(
+        (c) =>
+          c.channel === 'voice' &&
+          (!beforeDate || c.lastActivityAt.getTime() < beforeDate.getTime()),
+      )
+      .sort((a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime());
 
+    // Stream messages older than the cursor in DESC order. Scoped to the
+    // customer's non-voice conversations (voice conversations carry their
+    // content on the Conversation document itself, not in `messages`).
+    // Served by the existing { conversationId: 1, sentAt: 1 } index — Mongo
+    // walks each conv's slice newest-first and merges. The `before` filter
+    // is applied at the index, so the query never touches messages newer
+    // than the page.
+    const nonVoiceConvIds = conversations
+      .filter((c) => c.channel !== 'voice')
+      .map((c) => c._id);
+    const msgFilter: Record<string, unknown> = {
+      conversationId: { $in: nonVoiceConvIds },
+    };
+    if (beforeDate) msgFilter.sentAt = { $lt: beforeDate };
+    const msgCursor = this.messageModel
+      .find(msgFilter)
+      .sort({ sentAt: -1 })
+      .lean()
+      .cursor();
 
+    // Walk the merged DESC stream (messages + voice convs) and accumulate
+    // blocks newest-first. A block is "sealed" the moment we observe a
+    // channel transition — so once we open the (limit+1)-th block we know
+    // the previous `limit` are complete and can stop.
+    const blocksDesc: TimelineBlock[] = [];
+    let hasMore = false;
+    let voiceIdx = 0;
+    let nextMsg = await msgCursor.next();
 
-    const entries: RawEntry[] = [];
+    const makeMessage = (m: NonNullable<typeof nextMsg>): TimelineMessage => ({
+      _id: (m._id as Types.ObjectId).toString(),
+      sentBy: m.sentBy,
+      content: m.content,
+      type: m.type,
+      sentAt: m.sentAt.toISOString(),
+      attachments: m.attachments,
+    });
 
-    for (const conv of conversations) {
-      if (conv.channel === 'voice') {
-        entries.push({
-          sortKey: conv.lastActivityAt,
-          convId: conv._id.toString(),
-          channel: conv.channel,
-          aiActive: conv.aiActive ?? true,
-          isVoice: true,
-        });
-      }
-    }
-
-    for (const msg of messages) {
-      const conv = convMap.get(msg.conversationId.toString());
-      if (!conv || conv.channel === 'voice') continue;
-      entries.push({
-        sortKey: msg.sentAt,
-        convId: conv._id.toString(),
-        channel: conv.channel,
-        aiActive: conv.aiActive ?? true,
-        message: {
-          _id: (msg._id as Types.ObjectId).toString(),
-          sentBy: msg.sentBy,
-          content: msg.content,
-          type: msg.type,
-          sentAt: msg.sentAt.toISOString(),
-          attachments: msg.attachments,
-        },
-        isVoice: false,
-      });
-    }
-
-    entries.sort((a, b) => a.sortKey.getTime() - b.sortKey.getTime());
-
-    const blocks: TimelineBlock[] = [];
-
-    for (const entry of entries) {
-      const last = blocks[blocks.length - 1];
-      if (last && last.channel === entry.channel) {
-        // Update to the most recent conversation's state
-        last.conversationId = entry.convId;
-        last.aiActive = entry.aiActive;
-        if (!entry.isVoice && entry.message) {
-          last.messages.push(entry.message);
+    try {
+      while (true) {
+        // Skip messages whose conversation is missing or voice (defensive —
+        // voice conversations are not expected to have message rows).
+        while (nextMsg) {
+          const c = convMap.get(nextMsg.conversationId.toString());
+          if (c && c.channel !== 'voice') break;
+          nextMsg = await msgCursor.next();
         }
-      } else {
-        const conv = convMap.get(entry.convId)!;
-        blocks.push({
-          channel: entry.channel,
-          conversationId: entry.convId,
-          aiActive: entry.aiActive,
-          blockStart: entry.sortKey.toISOString(),
-          channelData: {
-            subject: conv.channelData?.subject,
-            duration: conv.channelData?.duration,
-            outcome: conv.channelData?.outcome,
-            transcript: conv.channelData?.transcript,
-          },
-          messages: entry.isVoice ? [] : (entry.message ? [entry.message] : []),
-        });
+
+        const voiceHead = voiceEntries[voiceIdx];
+        let take: 'msg' | 'voice' | null = null;
+        if (nextMsg && voiceHead) {
+          take =
+            nextMsg.sentAt.getTime() >= voiceHead.lastActivityAt.getTime()
+              ? 'msg'
+              : 'voice';
+        } else if (nextMsg) take = 'msg';
+        else if (voiceHead) take = 'voice';
+        else break;
+
+        let conv: ReturnType<typeof convMap.get>;
+        let sortKey: Date;
+        let message: TimelineMessage | null = null;
+        if (take === 'msg') {
+          conv = convMap.get(nextMsg!.conversationId.toString());
+          sortKey = nextMsg!.sentAt;
+          message = makeMessage(nextMsg!);
+          nextMsg = await msgCursor.next();
+        } else {
+          conv = voiceHead;
+          sortKey = voiceHead.lastActivityAt;
+          voiceIdx++;
+        }
+        const channel = conv!.channel;
+
+        const last = blocksDesc[blocksDesc.length - 1];
+        if (last && last.channel === channel) {
+          // Walking DESC, this entry is older than everything already in the
+          // block. blockStart/channelData reflect the OLDEST seen so far
+          // (matches the existing semantics: the oldest conversation's data
+          // wins for a merged block).
+          last.blockStart = sortKey.toISOString();
+          last.channelData = {
+            subject: conv!.channelData?.subject,
+            duration: conv!.channelData?.duration,
+            outcome: conv!.channelData?.outcome,
+            transcript: conv!.channelData?.transcript,
+          };
+          if (message) last.messages.unshift(message);
+        } else {
+          if (blocksDesc.length >= limit) {
+            // We just observed a channel transition past the limit-th block,
+            // so all prior blocks are sealed. Stop without consuming more.
+            hasMore = true;
+            break;
+          }
+          blocksDesc.push({
+            channel,
+            // conversationId/aiActive reflect the NEWEST conversation in the
+            // block (first one encountered when walking DESC).
+            conversationId: conv!._id.toString(),
+            aiActive: conv!.aiActive ?? true,
+            blockStart: sortKey.toISOString(),
+            channelData: {
+              subject: conv!.channelData?.subject,
+              duration: conv!.channelData?.duration,
+              outcome: conv!.channelData?.outcome,
+              transcript: conv!.channelData?.transcript,
+            },
+            messages: message ? [message] : [],
+          });
+        }
       }
+    } finally {
+      await msgCursor.close();
     }
 
-    // Pagination is applied *after* block computation so that block boundaries
-    // (consecutive same-channel grouping across conversations) stay consistent
-    // page-to-page. We compute all blocks server-side and slice the requested
-    // window. For very long histories this becomes wasteful — a real-world
-    // optimization would index block boundaries and stream messages on demand;
-    // out of scope for the MVP.
-    const filtered = beforeDate
-      ? blocks.filter((b) => new Date(b.blockStart) < beforeDate)
-      : blocks;
-    const pageBlocks = filtered.slice(-limit);
-    const hasMore = filtered.length > pageBlocks.length;
-    const nextCursor = hasMore ? pageBlocks[0].blockStart : null;
+    // Reverse to chronological order (oldest first) — the wire contract.
+    const blocks = blocksDesc.reverse();
+    const nextCursor = hasMore && blocks.length > 0 ? blocks[0].blockStart : null;
 
-    return { blocks: pageBlocks, hasMore, nextCursor };
+    return { blocks, hasMore, nextCursor };
   }
 }

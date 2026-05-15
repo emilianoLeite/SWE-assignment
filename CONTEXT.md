@@ -58,7 +58,7 @@ _Avoid_: Event, entry, item
 
 ## Message storage
 
-Voice transcripts are embedded directly in `channelData.transcript` — a voice call produces exactly one transcript, so the array-growth and pagination problems don't apply. All other channels (WhatsApp, email, on-site) store messages in a separate `messages` collection, referenced by `conversationId`.
+Voice transcripts are embedded directly in `channelData.transcript` — a voice call produces exactly one transcript, so the array-growth and pagination problems don't apply. All other channels (WhatsApp, email, on-site) store messages in a separate `messages` collection, referenced by `conversationId`. The `{ conversationId: 1, sentAt: 1 }` index serves both per-conversation reads and the per-customer timeline (via `conversationId: { $in: customerConvIds }`); see "Unified inbox — timeline pagination" below.
 
 **Tradeoffs of embedding messages in the Conversation document (not done, documented for reference):**
 
@@ -101,6 +101,25 @@ Block headers carry channel-specific context:
 - **Email**: subject line
 - **Voice**: "Call · {duration} · {outcome}" followed by the full transcript
 - **WhatsApp / On-site**: no header (customer name is already shown at the top of the detail view)
+
+### Unified inbox — timeline pagination
+
+`GET /customers/:id/timeline?limit=N&before=<iso>` returns the **N newest Conversation Blocks** older than the `before` cursor (defaults to "now"). The `before` cursor is the `blockStart` of the oldest block in the previous page — so successive pages stitch into a single continuous, non-overlapping history.
+
+**The query is pushed down to the database, not computed in memory.** The implementation walks two DESC streams and merges them by sort key:
+
+1. **Messages** — `find({ conversationId: { $in: nonVoiceConvIds }, sentAt: { $lt: beforeDate } }).sort({ sentAt: -1 })`, served by the existing `{ conversationId: 1, sentAt: 1 }` index on `Message` (scanned in reverse). Iterated through a Mongo cursor so the server never reads further than the requested `limit + 1` blocks worth of data. The customer's conversation set is small (a handful per customer), bounded, and already in memory by the time this query runs.
+2. **Voice conversations** — bounded set per customer, fetched once with `lastActivityAt < beforeDate` and merged into the descending stream (voice channels have no message rows, so the conversation's `lastActivityAt` is the entry's sort key).
+
+Blocks are accumulated newest-first; a block is **sealed** the moment a channel transition is observed. Once the (limit+1)-th block opens, the previous `limit` blocks are known to be complete and iteration stops. The result is reversed to chronological (oldest-first) order before returning.
+
+**Block field semantics** (preserved across the rewrite):
+- `blockStart` = `sentAt` of the **oldest** entry in the block (the pagination cursor).
+- `conversationId`, `aiActive` = values from the **newest** conversation in the block (drives the reply box / AI-toggle state for that channel).
+- `channelData` = values from the **oldest** conversation in the block (the older email's subject / voice's transcript win when two same-channel conversations are merged).
+- `messages` = chronological, ascending.
+
+**Trade-off vs. the previous "build all blocks, slice" implementation:** if a single logical block spans a page boundary in the new streamed scheme, it is split into two blocks across two pages instead of being merged into one. This is acceptable because (a) the visible UI stitches pages directly and (b) preserving cross-page block fusion would require either fetching the full history or a second roundtrip per page — defeating the pagination goal. The block-grouping rule still holds *within* every page.
 
 ## Identity Resolution
 
