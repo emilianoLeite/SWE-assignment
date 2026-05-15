@@ -40,8 +40,19 @@ export class CustomersController {
   }
 
   @Get(':id/timeline')
-  getTimeline(@Param('id') id: string) {
-    return this.customersService.getTimeline(id);
+  getTimeline(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('before') before?: string,
+  ) {
+    const parsedLimit = limit ? Number(limit) : undefined;
+    if (parsedLimit !== undefined && !Number.isFinite(parsedLimit)) {
+      throw new BadRequestException('Invalid limit');
+    }
+    return this.customersService.getTimeline(id, {
+      limit: parsedLimit,
+      before,
+    });
   }
 
   @Get(':id')

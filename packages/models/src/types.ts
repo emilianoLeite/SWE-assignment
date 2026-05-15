@@ -125,6 +125,15 @@ export interface TimelineBlock {
   messages: TimelineMessage[];
 }
 
+// Paginated timeline response. Cursor is the `blockStart` of the oldest block
+// returned in this page — pass it back as `before` to fetch the next page of
+// older blocks. `nextCursor` is null when no older blocks remain.
+export interface TimelinePage {
+  blocks: TimelineBlock[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
 export interface CustomerFilters {
   status?: string;
   assigneeId?: string;

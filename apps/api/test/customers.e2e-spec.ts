@@ -431,9 +431,11 @@ describe('GET /customers/:id/timeline (e2e)', () => {
       .get(`/customers/${customer._id}/timeline`)
       .expect(200);
 
-    expect(body).toHaveLength(2);
-    expect(body[0].channel).toBe('whatsapp');
-    expect(body[1].channel).toBe('email');
+    expect(body.blocks).toHaveLength(2);
+    expect(body.blocks[0].channel).toBe('whatsapp');
+    expect(body.blocks[1].channel).toBe('email');
+    expect(body.hasMore).toBe(false);
+    expect(body.nextCursor).toBeNull();
   });
 
   // ── RED 2: consecutive same-channel messages merged into one block ───────
@@ -461,11 +463,11 @@ describe('GET /customers/:id/timeline (e2e)', () => {
       .get(`/customers/${customer._id}/timeline`)
       .expect(200);
 
-    expect(body).toHaveLength(1);
-    expect(body[0].channel).toBe('whatsapp');
-    expect(body[0].messages).toHaveLength(2);
-    expect(body[0].messages[0].content).toBe('First');
-    expect(body[0].messages[1].content).toBe('Second');
+    expect(body.blocks).toHaveLength(1);
+    expect(body.blocks[0].channel).toBe('whatsapp');
+    expect(body.blocks[0].messages).toHaveLength(2);
+    expect(body.blocks[0].messages[0].content).toBe('First');
+    expect(body.blocks[0].messages[1].content).toBe('Second');
   });
 
   // ── RED 3: voice block has transcript, empty messages ────────────────────
@@ -492,13 +494,13 @@ describe('GET /customers/:id/timeline (e2e)', () => {
       .get(`/customers/${customer._id}/timeline`)
       .expect(200);
 
-    expect(body).toHaveLength(1);
-    expect(body[0].channel).toBe('voice');
-    expect(body[0].messages).toHaveLength(0);
-    expect(body[0].channelData.duration).toBe('3:45');
-    expect(body[0].channelData.outcome).toBe('Successful');
-    expect(body[0].channelData.transcript).toHaveLength(2);
-    expect(body[0].channelData.transcript[0]).toEqual({ speaker: 'ai', text: 'Buongiorno!' });
+    expect(body.blocks).toHaveLength(1);
+    expect(body.blocks[0].channel).toBe('voice');
+    expect(body.blocks[0].messages).toHaveLength(0);
+    expect(body.blocks[0].channelData.duration).toBe('3:45');
+    expect(body.blocks[0].channelData.outcome).toBe('Successful');
+    expect(body.blocks[0].channelData.transcript).toHaveLength(2);
+    expect(body.blocks[0].channelData.transcript[0]).toEqual({ speaker: 'ai', text: 'Buongiorno!' });
   });
 
   // ── RED 4: invalid customerId → 400 ──────────────────────────────────────
@@ -509,14 +511,61 @@ describe('GET /customers/:id/timeline (e2e)', () => {
       .expect(400);
   });
 
-  // ── RED 5: unknown customerId → empty array ───────────────────────────────
+  // ── RED 5: unknown customerId → empty page ────────────────────────────────
 
-  it('returns empty array for unknown customerId', async () => {
+  it('returns empty page for unknown customerId', async () => {
     const { body } = await request(app.getHttpServer())
       .get(`/customers/${new Types.ObjectId()}/timeline`)
       .expect(200);
 
-    expect(body).toEqual([]);
+    expect(body).toEqual({ blocks: [], hasMore: false, nextCursor: null });
+  });
+
+  // ── pagination: limit + before cursor ────────────────────────────────────
+
+  it('paginates by block using limit and before cursor', async () => {
+    const customer = await CustomerModel.create({
+      brandId: BRAND, name: 'Lia', lastActivityAt: new Date('2024-05-10'),
+    });
+
+    // 5 alternating-channel conversations → 5 distinct blocks.
+    const channels = ['whatsapp', 'email', 'whatsapp', 'email', 'whatsapp'] as const;
+    const convs = await Promise.all(channels.map((ch, i) =>
+      ConvModel.create({
+        brandId: BRAND, customerId: customer._id, channel: ch,
+        status: 'managed', type: 'inbound',
+        lastActivityAt: new Date(`2024-05-0${i + 1}`),
+      }),
+    ));
+    await MsgModel.insertMany(convs.map((c, i) => ({
+      conversationId: c._id, sentBy: 'customer', content: `msg ${i}`, type: 'text',
+      sentAt: new Date(`2024-05-0${i + 1}T10:00:00Z`),
+    })));
+
+    // Page 1: last 2 blocks (newest), expect cursor + hasMore.
+    const page1 = await request(app.getHttpServer())
+      .get(`/customers/${customer._id}/timeline?limit=2`)
+      .expect(200);
+    expect(page1.body.blocks).toHaveLength(2);
+    expect(page1.body.hasMore).toBe(true);
+    expect(page1.body.nextCursor).toBeTruthy();
+    // Newest two blocks correspond to convs[3] and convs[4].
+    expect(page1.body.blocks[1].channel).toBe('whatsapp');
+
+    // Page 2: blocks older than page1's cursor.
+    const page2 = await request(app.getHttpServer())
+      .get(`/customers/${customer._id}/timeline?limit=2&before=${encodeURIComponent(page1.body.nextCursor)}`)
+      .expect(200);
+    expect(page2.body.blocks).toHaveLength(2);
+    expect(page2.body.hasMore).toBe(true);
+
+    // Page 3: last block — hasMore is false, cursor null.
+    const page3 = await request(app.getHttpServer())
+      .get(`/customers/${customer._id}/timeline?limit=2&before=${encodeURIComponent(page2.body.nextCursor)}`)
+      .expect(200);
+    expect(page3.body.blocks).toHaveLength(1);
+    expect(page3.body.hasMore).toBe(false);
+    expect(page3.body.nextCursor).toBeNull();
   });
 });
 

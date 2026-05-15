@@ -12,6 +12,10 @@ function hoursAgo(h: number): Date {
   return new Date(Date.now() - h * 3_600_000);
 }
 
+function daysAgoFractional(d: number): Date {
+  return new Date(Date.now() - d * 86_400_000);
+}
+
 // ── inline schema definitions (no NestJS decorators needed here) ──────────────
 
 const operatorSchema = new Schema({ name: String, email: String }, { timestamps: true });
@@ -112,7 +116,7 @@ export async function runSeed(conn: Connection): Promise<void> {
 
   // ── customers ────────────────────────────────────────────────────────────
   // lastActivityAt will be back-filled after messages are created
-  const [anna, roberto, chiara, davide, elena] = await Customer.insertMany([
+  const [anna, roberto, chiara, davide, elena, francesca] = await Customer.insertMany([
     {
       brandId: BRAND_ID,
       name: 'Anna Conti',
@@ -163,6 +167,21 @@ export async function runSeed(conn: Connection): Promise<void> {
       lastOrder: { id: 'ORD-10067', placedAt: daysAgo(1) },
       lastActivityAt: daysAgo(1),
     },
+    // Francesca has a long, multi-channel history — used to showcase the
+    // unified-inbox timeline pagination (eager-load last 3 blocks, fetch
+    // older on scroll up). Channels intentionally alternate so each
+    // conversation becomes its own Conversation Block.
+    {
+      brandId: BRAND_ID,
+      name: 'Francesca Greco',
+      email: 'francesca.greco@email.it',
+      phone: '+39 348 1122334',
+      lifetimeSpend: 3420,
+      tags: ['vip', 'abbonata'],
+      notes: 'Cliente storica con interazioni frequenti su tutti i canali.',
+      lastOrder: { id: 'ORD-10088', placedAt: hoursAgo(3) },
+      lastActivityAt: hoursAgo(1),
+    },
   ]);
 
   // ── conversations ─────────────────────────────────────────────────────────
@@ -179,6 +198,17 @@ export async function runSeed(conn: Connection): Promise<void> {
     elenaWa,    // whatsapp / managed      / inbound
     elenaOs,    // onsite   / to_manage    / outbound
     elenaEmail, // email    / blocked      / inbound
+    // Francesca — long alternating history for pagination demo
+    fraWa1,     // whatsapp / to_manage   / inbound  — newest
+    fraEmail1,  // email    / managed     / inbound
+    fraOnsite1, // onsite   / ai_controlled / inbound
+    fraWa2,     // whatsapp / managed     / inbound
+    fraVoice,   // voice    / ai_controlled / inbound — transcript only
+    fraEmail2,  // email    / managed     / outbound
+    fraWa3,     // whatsapp / managed     / inbound
+    fraOnsite2, // onsite   / ai_controlled / outbound
+    fraEmail3,  // email    / managed     / inbound
+    fraWa4,     // whatsapp / managed     / inbound  — oldest
   ] = await Conversation.insertMany([
     {
       brandId: BRAND_ID,
@@ -326,6 +356,121 @@ export async function runSeed(conn: Connection): Promise<void> {
       aiActive: false,
       lastActivityAt: daysAgo(2),
       channelData: { subject: 'Richiesta fattura ordine #10067' },
+    },
+    // ── Francesca's 10 alternating-channel conversations ──────────────────
+    // Listed newest → oldest. Channels alternate so each becomes its own
+    // Conversation Block in the unified timeline.
+    {
+      brandId: BRAND_ID,
+      customerId: francesca._id,
+      channel: 'whatsapp',
+      status: 'to_manage',
+      type: 'inbound',
+      assigneeId: giulia._id,
+      aiActive: false,
+      lastActivityAt: hoursAgo(1),
+    },
+    {
+      brandId: BRAND_ID,
+      customerId: francesca._id,
+      channel: 'email',
+      status: 'managed',
+      type: 'inbound',
+      assigneeId: giulia._id,
+      aiActive: false,
+      lastActivityAt: hoursAgo(8),
+      channelData: { subject: 'Conferma ordine #10088' },
+    },
+    {
+      brandId: BRAND_ID,
+      customerId: francesca._id,
+      channel: 'onsite',
+      status: 'ai_controlled',
+      type: 'inbound',
+      aiActive: true,
+      lastActivityAt: daysAgoFractional(2),
+    },
+    {
+      brandId: BRAND_ID,
+      customerId: francesca._id,
+      channel: 'whatsapp',
+      status: 'managed',
+      type: 'inbound',
+      assigneeId: giulia._id,
+      aiActive: false,
+      lastActivityAt: daysAgoFractional(4),
+    },
+    {
+      brandId: BRAND_ID,
+      customerId: francesca._id,
+      channel: 'voice',
+      status: 'ai_controlled',
+      type: 'inbound',
+      aiActive: true,
+      lastActivityAt: daysAgo(7),
+      channelData: {
+        duration: '3:18',
+        outcome: 'Successful',
+        transcript: [
+          { speaker: 'ai', text: 'Buongiorno Francesca, come posso aiutarla?' },
+          { speaker: 'customer', text: 'Volevo sapere se la nuova collezione è già online.' },
+          { speaker: 'ai', text: 'Sì, è disponibile da ieri sul nostro sito. Le invio il link via WhatsApp.' },
+          { speaker: 'customer', text: 'Perfetto, grazie!' },
+        ],
+      },
+    },
+    {
+      brandId: BRAND_ID,
+      customerId: francesca._id,
+      channel: 'email',
+      status: 'managed',
+      type: 'outbound',
+      assigneeId: giulia._id,
+      aiActive: false,
+      campaign: 'newsletter-mag',
+      lastActivityAt: daysAgo(10),
+      channelData: { subject: 'Anteprima collezione primavera' },
+    },
+    {
+      brandId: BRAND_ID,
+      customerId: francesca._id,
+      channel: 'whatsapp',
+      status: 'managed',
+      type: 'inbound',
+      assigneeId: giulia._id,
+      aiActive: false,
+      lastActivityAt: daysAgo(15),
+    },
+    {
+      brandId: BRAND_ID,
+      customerId: francesca._id,
+      channel: 'onsite',
+      status: 'ai_controlled',
+      type: 'outbound',
+      aiActive: true,
+      campaign: 'estate-2024',
+      lastActivityAt: daysAgo(22),
+    },
+    {
+      brandId: BRAND_ID,
+      customerId: francesca._id,
+      channel: 'email',
+      status: 'managed',
+      type: 'inbound',
+      assigneeId: giulia._id,
+      aiActive: false,
+      lastActivityAt: daysAgo(30),
+      channelData: { subject: 'Domanda sulla taglia del cappotto' },
+    },
+    {
+      brandId: BRAND_ID,
+      customerId: francesca._id,
+      channel: 'whatsapp',
+      status: 'managed',
+      type: 'inbound',
+      assigneeId: giulia._id,
+      aiActive: false,
+      lastActivityAt: daysAgo(45),
     },
   ]);
 
@@ -541,6 +686,53 @@ export async function runSeed(conn: Connection): Promise<void> {
       type: 'text',
       sentAt: daysAgo(2),
     },
+
+    // ── Francesca's messages ─────────────────────────────────────────────────
+    // Each conversation lives in its own non-overlapping time window so the
+    // resulting Conversation Blocks line up 1:1 with their source Conversation
+    // (and pagination is observable).
+    // fraWa1 — newest WhatsApp (~1h ago)
+    { conversationId: fraWa1._id, sentBy: 'customer', content: 'Ciao! Il mio ordine #10088 è stato spedito?', type: 'text', sentAt: hoursAgo(2) },
+    { conversationId: fraWa1._id, sentBy: 'ai', content: 'Ciao Francesca! Sì, è in viaggio — consegna prevista domani.', type: 'text', sentAt: hoursAgo(1.5) },
+    { conversationId: fraWa1._id, sentBy: 'customer', content: 'Grazie!', type: 'text', sentAt: hoursAgo(1) },
+
+    // fraEmail1 — Email ~8h ago
+    { conversationId: fraEmail1._id, sentBy: 'customer', content: 'Buongiorno, vorrei la conferma scritta dell\'ordine #10088.', type: 'text', sentAt: hoursAgo(10) },
+    { conversationId: fraEmail1._id, sentBy: 'ai', content: 'Gentile Francesca, in allegato la conferma d\'ordine.', type: 'text', sentAt: hoursAgo(9), attachments: [{ filename: 'conferma_10088.pdf', size: 124_000, mimeType: 'application/pdf' }] },
+    { conversationId: fraEmail1._id, sentBy: 'customer', content: 'Ricevuto, grazie.', type: 'text', sentAt: hoursAgo(8) },
+
+    // fraOnsite1 — Onsite ~2 days ago
+    { conversationId: fraOnsite1._id, sentBy: 'customer', content: 'Avete questo modello in blu?', type: 'text', sentAt: daysAgoFractional(2.5) },
+    { conversationId: fraOnsite1._id, sentBy: 'ai', content: 'Sì, è disponibile in blu, taglie dalla S alla L.', type: 'text', sentAt: daysAgoFractional(2.25) },
+    { conversationId: fraOnsite1._id, sentBy: 'customer', content: 'Perfetto, lo aggiungo al carrello.', type: 'text', sentAt: daysAgoFractional(2) },
+
+    // fraWa2 — WhatsApp ~4 days ago
+    { conversationId: fraWa2._id, sentBy: 'customer', content: 'Quando arriva il riassortimento delle sneakers bianche?', type: 'text', sentAt: daysAgoFractional(4.5) },
+    { conversationId: fraWa2._id, sentBy: 'ai', content: 'Le aspettiamo entro fine mese. Vuole che le mandi un avviso?', type: 'text', sentAt: daysAgoFractional(4.25) },
+    { conversationId: fraWa2._id, sentBy: 'customer', content: 'Sì grazie!', type: 'text', sentAt: daysAgoFractional(4) },
+
+    // fraVoice — Voice ~7 days ago (no messages — transcript only on channelData)
+
+    // fraEmail2 — Email outbound ~10 days ago
+    { conversationId: fraEmail2._id, sentBy: 'operator', content: 'Ciao Francesca,\n\ncome cliente VIP ti invitiamo all\'anteprima della nuova collezione primavera. Trovi il catalogo in allegato.\n\nA presto,\nIl team TextYess', type: 'text', sentAt: daysAgo(11), attachments: [{ filename: 'catalogo_primavera.pdf', size: 3_840_000, mimeType: 'application/pdf' }] },
+    { conversationId: fraEmail2._id, sentBy: 'customer', content: 'Grazie! Mi piace molto il trench beige, lo prenoto.', type: 'text', sentAt: daysAgo(10) },
+
+    // fraWa3 — WhatsApp ~15 days ago
+    { conversationId: fraWa3._id, sentBy: 'customer', content: 'Ho ricevuto il pacco, tutto perfetto!', type: 'text', sentAt: daysAgo(16) },
+    { conversationId: fraWa3._id, sentBy: 'ai', content: 'Felicissimi di sentirlo! Grazie del feedback.', type: 'text', sentAt: daysAgo(15) },
+
+    // fraOnsite2 — Onsite outbound ~22 days ago
+    { conversationId: fraOnsite2._id, sentBy: 'ai', content: 'Ciao Francesca! Saldi estate iniziati — sconti fino al 40%.', type: 'text', sentAt: daysAgo(23) },
+    { conversationId: fraOnsite2._id, sentBy: 'customer', content: 'Vediamo se trovo qualcosa di interessante.', type: 'text', sentAt: daysAgo(22) },
+
+    // fraEmail3 — Email ~30 days ago
+    { conversationId: fraEmail3._id, sentBy: 'customer', content: 'Buongiorno,\n\nho dei dubbi sulla taglia del cappotto modello "Aurora". Il mio solito sarebbe una 42, ma noto che le misure sembrano abbondanti.\n\nMi consigliate di scendere a una 40?\n\nGrazie,\nFrancesca', type: 'text', sentAt: daysAgo(31) },
+    { conversationId: fraEmail3._id, sentBy: 'ai', content: 'Gentile Francesca,\n\nle confermiamo che il modello "Aurora" calza leggermente abbondante: consigliamo una 40 se preferisce una vestibilità slim, una 42 se la desidera più morbida.\n\nResto a disposizione,\nAssistenza TextYess', type: 'text', sentAt: daysAgo(30) },
+
+    // fraWa4 — WhatsApp ~45 days ago (oldest)
+    { conversationId: fraWa4._id, sentBy: 'customer', content: 'Salve, come funziona il programma fedeltà?', type: 'text', sentAt: daysAgo(46) },
+    { conversationId: fraWa4._id, sentBy: 'ai', content: 'Ogni euro speso vale 1 punto: a 500 punti riceve uno sconto del 10% sull\'ordine successivo.', type: 'text', sentAt: daysAgoFractional(45.5) },
+    { conversationId: fraWa4._id, sentBy: 'customer', content: 'Ottimo, grazie!', type: 'text', sentAt: daysAgo(45) },
   ];
 
   await Message.insertMany(msgs);
@@ -552,9 +744,11 @@ export async function runSeed(conn: Connection): Promise<void> {
     chiaraEmail, chiaraEmailOut,
     davideVoice, davideEmail,
     elenaWa, elenaOs, elenaEmail,
+    fraWa1, fraEmail1, fraOnsite1, fraWa2, fraVoice,
+    fraEmail2, fraWa3, fraOnsite2, fraEmail3, fraWa4,
   ];
 
-  for (const customer of [anna, roberto, chiara, davide, elena]) {
+  for (const customer of [anna, roberto, chiara, davide, elena, francesca]) {
     const customerConvIds = allConvs
       .filter((c) => c.customerId.toString() === customer._id.toString())
       .map((c) => c._id);

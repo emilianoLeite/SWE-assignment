@@ -14,7 +14,11 @@ import type {
   CustomerListItem,
   TimelineBlock,
   TimelineMessage,
+  TimelinePage,
 } from '@textyess/models';
+
+const DEFAULT_TIMELINE_LIMIT = 3;
+const MAX_TIMELINE_LIMIT = 50;
 
 const URGENCY_RANK: PipelineStage.AddFields['$addFields'] = {
   $switch: {
@@ -253,9 +257,21 @@ export class CustomersService {
     };
   }
 
-  async getTimeline(customerId: string): Promise<TimelineBlock[]> {
+  async getTimeline(
+    customerId: string,
+    opts: { limit?: number; before?: string } = {},
+  ): Promise<TimelinePage> {
     if (!Types.ObjectId.isValid(customerId)) {
       throw new BadRequestException('Invalid customerId');
+    }
+
+    const limit = Math.min(
+      Math.max(1, opts.limit ?? DEFAULT_TIMELINE_LIMIT),
+      MAX_TIMELINE_LIMIT,
+    );
+    const beforeDate = opts.before ? new Date(opts.before) : null;
+    if (beforeDate && Number.isNaN(beforeDate.getTime())) {
+      throw new BadRequestException('Invalid `before` cursor');
     }
 
     const customerOid = new Types.ObjectId(customerId);
@@ -264,7 +280,9 @@ export class CustomersService {
       .find({ customerId: customerOid })
       .lean();
 
-    if (conversations.length === 0) return [];
+    if (conversations.length === 0) {
+      return { blocks: [], hasMore: false, nextCursor: null };
+    }
 
     const convIds = conversations.map((c) => c._id);
     const convMap = new Map(conversations.map((c) => [c._id.toString(), c]));
@@ -348,6 +366,19 @@ export class CustomersService {
       }
     }
 
-    return blocks;
+    // Pagination is applied *after* block computation so that block boundaries
+    // (consecutive same-channel grouping across conversations) stay consistent
+    // page-to-page. We compute all blocks server-side and slice the requested
+    // window. For very long histories this becomes wasteful — a real-world
+    // optimization would index block boundaries and stream messages on demand;
+    // out of scope for the MVP.
+    const filtered = beforeDate
+      ? blocks.filter((b) => new Date(b.blockStart) < beforeDate)
+      : blocks;
+    const pageBlocks = filtered.slice(-limit);
+    const hasMore = filtered.length > pageBlocks.length;
+    const nextCursor = hasMore ? pageBlocks[0].blockStart : null;
+
+    return { blocks: pageBlocks, hasMore, nextCursor };
   }
 }

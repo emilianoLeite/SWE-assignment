@@ -2,8 +2,8 @@
 
 // Three-column layout: customer list | timeline | customer details panel
 
-import { useState, useMemo, useCallback, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useMemo, useCallback, useEffect, useRef, useLayoutEffect } from "react";
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from "@tanstack/react-query";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   Search, Filter, Ban, Copy,
@@ -18,7 +18,10 @@ import type {
   CustomerFilters,
   CustomerListItem as ApiCustomer,
   TimelineBlock as ApiTimelineBlock,
+  TimelinePage as ApiTimelinePage,
 } from "@textyess/models";
+
+const TIMELINE_PAGE_SIZE = 3;
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 const BRAND_ID = "aaaaaaaaaaaaaaaaaaaaaaaa";
@@ -88,13 +91,18 @@ function useCustomerDetail(customerId: string) {
 }
 
 function useTimeline(customerId: string) {
-  return useQuery<ApiTimelineBlock[]>({
+  return useInfiniteQuery<ApiTimelinePage, Error>({
     queryKey: ["timeline", customerId],
-    queryFn: () =>
-      fetch(`${API_URL}/customers/${customerId}/timeline`).then((r) => {
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: String(TIMELINE_PAGE_SIZE) });
+      if (pageParam) params.set("before", pageParam as string);
+      return fetch(`${API_URL}/customers/${customerId}/timeline?${params.toString()}`).then((r) => {
         if (!r.ok) throw new Error("Failed to fetch timeline");
         return r.json();
-      }),
+      });
+    },
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: !!customerId,
   });
 }
@@ -577,17 +585,35 @@ function useToggleAi(customerId: string) {
 
 function TimelinePanel({ customerId, apiCustomer, onToggleDetails, onOpenDetails }: { customerId: string; apiCustomer?: ApiCustomerDetail; onToggleDetails: () => void; onOpenDetails: () => void }) {
   const [replyChannel, setReplyChannel] = useState<Channel>("whatsapp");
-  const { data: apiBlocks, isLoading: timelineLoading } = useTimeline(customerId);
+  const {
+    data,
+    isLoading: timelineLoading,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useTimeline(customerId);
   const toggleAi = useToggleAi(customerId);
 
+  // useInfiniteQuery returns pages in the order they were fetched.
+  // page[0] is the newest 3 blocks; later pages are progressively older.
+  // Render with oldest at top → newest at bottom, so reverse the page order
+  // and flatten.
+  const apiBlocks = useMemo<ApiTimelineBlock[]>(() => {
+    if (!data?.pages) return [];
+    return data.pages
+      .slice()
+      .reverse()
+      .flatMap((p) => p.blocks);
+  }, [data?.pages]);
+
   const blocks = useMemo(
-    () => apiBlocks ? apiBlocksToFrontend(apiBlocks) : [],
+    () => apiBlocksToFrontend(apiBlocks),
     [apiBlocks],
   );
 
   const replyChannels = useMemo(() => {
     return (["whatsapp", "email"] as Channel[]).map((ch) => {
-      const lastBlock = [...(apiBlocks ?? [])]
+      const lastBlock = apiBlocks
         .filter((b) => b.channel === ch)
         .at(-1);
       return {
@@ -598,6 +624,64 @@ function TimelinePanel({ customerId, apiCustomer, onToggleDetails, onOpenDetails
       };
     });
   }, [apiBlocks]);
+
+  // Scroll behaviour for infinite-scroll-up:
+  // - on customer change, jump to the bottom (newest message visible)
+  // - when older blocks are prepended via fetchNextPage, hold the visible
+  //   anchor by adjusting scrollTop by the height delta. Without this, the
+  //   user gets yanked to the top every time more is loaded.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const prevScrollHeight = useRef<number>(0);
+  const lastScrolledCustomer = useRef<string>("");
+
+  const fetchOlder = useCallback(() => {
+    if (!hasNextPage || isFetchingNextPage) return;
+    if (scrollRef.current) {
+      prevScrollHeight.current = scrollRef.current.scrollHeight;
+    }
+    fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  // Restore the visible anchor after an older page lands.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (prevScrollHeight.current === 0) return;
+    const delta = el.scrollHeight - prevScrollHeight.current;
+    if (delta > 0) {
+      el.scrollTop = el.scrollTop + delta;
+    }
+    prevScrollHeight.current = 0;
+  }, [apiBlocks.length]);
+
+  // Snap to bottom once the timeline has data for this customer. Tracks the
+  // last customer we scrolled for so re-clicking the same customer doesn't
+  // yank back to bottom mid-scroll.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !customerId) return;
+    if (lastScrolledCustomer.current === customerId) return;
+    if (!data?.pages?.length) return;
+    el.scrollTop = el.scrollHeight;
+    lastScrolledCustomer.current = customerId;
+  }, [customerId, data?.pages?.length]);
+
+  // Observe the top sentinel — when it scrolls into view, fetch the next
+  // (older) page.
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node) return;
+    if (!hasNextPage) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) fetchOlder();
+      },
+      { root: scrollRef.current, threshold: 0 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasNextPage, fetchOlder]);
 
   const activeChannelState = replyChannels.find((rc) => rc.channel === replyChannel);
   const canReply = !!activeChannelState?.hasConv && !activeChannelState?.aiActive;
@@ -661,11 +745,20 @@ function TimelinePanel({ customerId, apiCustomer, onToggleDetails, onOpenDetails
       </div>
 
       {/* Timeline */}
-      <div className="flex-1 overflow-y-auto px-5 py-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4">
         {timelineLoading && customerId ? (
           <div className="py-12 text-center text-[13px] text-neutral-400">Loading timeline…</div>
         ) : (
-          blocks.map((block, i) => <BlockView key={i} block={block} />)
+          <>
+            {/* Top sentinel — when visible, triggers a fetch of older blocks. */}
+            <div ref={sentinelRef} />
+            {hasNextPage && (
+              <div className="py-3 text-center text-[12px] text-neutral-400">
+                {isFetchingNextPage ? "Loading older messages…" : "Scroll up to load older messages"}
+              </div>
+            )}
+            {blocks.map((block, i) => <BlockView key={block.blockStart + i} block={block} />)}
+          </>
         )}
       </div>
 
