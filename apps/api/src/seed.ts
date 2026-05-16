@@ -119,7 +119,7 @@ export async function runSeed(conn: Connection): Promise<void> {
 
   // ── customers ────────────────────────────────────────────────────────────
   // lastActivityAt will be back-filled after messages are created
-  const [anna, roberto, chiara, davide, elena, francesca, anonVisitor] = await Customer.insertMany([
+  const [anna, roberto, chiara, davide, elena, francesca, anonVisitor, anonCaller] = await Customer.insertMany([
     {
       brandId: BRAND_ID,
       kind: 'identified',
@@ -202,6 +202,17 @@ export async function runSeed(conn: Connection): Promise<void> {
       visitorId: 'vis_anon_001',
       lastActivityAt: hoursAgo(3),
     },
+    // Anonymous caller — reached us on both voice and WhatsApp from the same
+    // phone number. Phone is the dedup key: a single Customer record carries
+    // both channels until they share an email/name and get promoted.
+    {
+      brandId: BRAND_ID,
+      kind: 'anonymous',
+      name: 'Anonymous Caller',
+      phone: '+39 351 7788990',
+      tags: [],
+      lastActivityAt: hoursAgo(2),
+    },
   ]);
 
   // ── conversations ─────────────────────────────────────────────────────────
@@ -230,6 +241,8 @@ export async function runSeed(conn: Connection): Promise<void> {
     fraEmail3,  // email    / managed     / inbound
     fraWa4,     // whatsapp / managed     / inbound  — oldest
     anonOs,     // onsite   / ai_controlled / inbound — anonymous visitor
+    anonCallerVoice, // voice    / ai_controlled / inbound — anonymous caller (phone match)
+    anonCallerWa,    // whatsapp / to_manage     / inbound — anonymous caller (phone match)
   ] = await Conversation.insertMany([
     {
       brandId: BRAND_ID,
@@ -503,6 +516,37 @@ export async function runSeed(conn: Connection): Promise<void> {
       aiActive: true,
       lastActivityAt: hoursAgo(3),
     },
+    // anonymous caller — voice call, matched to anonCaller via phone number
+    {
+      brandId: BRAND_ID,
+      customerId: anonCaller._id,
+      channel: 'voice',
+      status: 'ai_controlled',
+      type: 'inbound',
+      aiActive: true,
+      lastActivityAt: hoursAgo(6),
+      channelData: {
+        duration: '2:48',
+        outcome: 'Successful',
+        transcript: [
+          { speaker: 'ai', text: 'Buongiorno, come posso aiutarla?' },
+          { speaker: 'customer', text: 'Salve, volevo sapere se avete ancora gli stivali neri in taglia 39.' },
+          { speaker: 'ai', text: 'Verifico subito. Sì, sono disponibili. Vuole che le invii il link via WhatsApp?' },
+          { speaker: 'customer', text: 'Sì grazie, allo stesso numero.' },
+          { speaker: 'ai', text: 'Perfetto, glielo mando subito.' },
+        ],
+      },
+    },
+    // anonymous caller — follow-up on WhatsApp from the same phone number
+    {
+      brandId: BRAND_ID,
+      customerId: anonCaller._id,
+      channel: 'whatsapp',
+      status: 'to_manage',
+      type: 'inbound',
+      aiActive: false,
+      lastActivityAt: hoursAgo(2),
+    },
   ]);
 
   // ── messages ─────────────────────────────────────────────────────────────
@@ -769,6 +813,12 @@ export async function runSeed(conn: Connection): Promise<void> {
     { conversationId: anonOs._id, sentBy: 'ai', content: 'Ciao! Posso aiutarti a trovare qualcosa?', type: 'text', sentAt: hoursAgo(4) },
     { conversationId: anonOs._id, sentBy: 'customer', content: 'Sto guardando le sneakers, fate spedizione in Svizzera?', type: 'text', sentAt: hoursAgo(3.5) },
     { conversationId: anonOs._id, sentBy: 'ai', content: 'Sì, spediamo in Svizzera con corriere espresso (3-5 giorni lavorativi).', type: 'text', sentAt: hoursAgo(3) },
+
+    // anonCallerWa — anonymous caller continues the conversation on WhatsApp,
+    // arriving from the same phone number used for the earlier voice call.
+    { conversationId: anonCallerWa._id, sentBy: 'ai', content: 'Le inoltro il link agli stivali neri taglia 39 di cui parlavamo al telefono.', type: 'text', sentAt: hoursAgo(5) },
+    { conversationId: anonCallerWa._id, sentBy: 'customer', content: 'Grazie! Posso pagare in contrassegno?', type: 'text', sentAt: hoursAgo(3) },
+    { conversationId: anonCallerWa._id, sentBy: 'customer', content: 'C\'è ancora qualcuno?', type: 'text', sentAt: hoursAgo(2) },
   ];
 
   await Message.insertMany(msgs);
@@ -783,9 +833,10 @@ export async function runSeed(conn: Connection): Promise<void> {
     fraWa1, fraEmail1, fraOnsite1, fraWa2, fraVoice,
     fraEmail2, fraWa3, fraOnsite2, fraEmail3, fraWa4,
     anonOs,
+    anonCallerVoice, anonCallerWa,
   ];
 
-  for (const customer of [anna, roberto, chiara, davide, elena, francesca, anonVisitor]) {
+  for (const customer of [anna, roberto, chiara, davide, elena, francesca, anonVisitor, anonCaller]) {
     const customerConvIds = allConvs
       .filter((c) => c.customerId.toString() === customer._id.toString())
       .map((c) => c._id);
